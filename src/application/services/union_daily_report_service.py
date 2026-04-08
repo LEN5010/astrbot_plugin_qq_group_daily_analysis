@@ -194,6 +194,25 @@ ${topics_text}
             llm_token_usage=token_usage,
         )
 
+    def get_missing_group_refs_for_date(
+        self,
+        group_refs: list[str],
+        report_date: str,
+    ) -> list[str]:
+        """
+        检查指定日期下哪些源群的单群 JSON 日报尚未就绪。
+        """
+        missing_group_refs: list[str] = []
+        normalized_group_refs = self._deduplicate_group_refs(group_refs)
+        for group_ref in normalized_group_refs:
+            analysis_result = self.history_repository.get_analysis_result(
+                group_ref,
+                report_date,
+            )
+            if analysis_result is None:
+                missing_group_refs.append(group_ref)
+        return missing_group_refs
+
     def _deduplicate_group_refs(self, group_refs: list[str]) -> list[str]:
         normalized: list[str] = []
         seen: set[str] = set()

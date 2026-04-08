@@ -975,7 +975,7 @@ class GroupDailyAnalysis(Star):
 
             self.bot_manager.update_from_event(event)
             yield event.plain_result(
-                f"🧪 开始生成跨群聚合日报测试，日期: {target_date}，发送目标: 当前群"
+                f"🧪 开始执行联合日报全链路测试，日期: {target_date}。先触发源群单群链路，再等待聚合并发送到当前群"
             )
 
             result = await self.auto_scheduler.run_union_report_manual(
@@ -998,6 +998,8 @@ class GroupDailyAnalysis(Star):
                 "no_report_data": "指定日期没有可聚合的单群日报 JSON",
                 "dispatch_failed": "报告已生成，但发送失败",
                 "disabled": "跨群日报功能未启用",
+                "source_reports_not_ready": "源群日报在等待窗口内未全部就绪",
+                "prepare_failed": "源群准备阶段全部失败，未进入联合聚合",
             }
             yield event.plain_result(
                 f"❌ 跨群聚合日报测试失败: {reason_map.get(reason, reason)}"

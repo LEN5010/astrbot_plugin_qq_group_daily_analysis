@@ -402,6 +402,18 @@
                 "description": "跨群日报固定发送时间",
                 "default": "",
                 "hint": "可选。填写 HH:MM 后，跨群日报将按固定时间独立触发，例如 12:00。留空时才使用 union_report_delay_minutes 的延迟模式。"
+            },
+            "union_prepare_lead_minutes": {
+                "type": "int",
+                "description": "固定时间模式提前启动分钟数",
+                "default": 20,
+                "hint": "固定时间模式下，会在 union_report_time 之前多少分钟先启动 union_groups_list 对应群的单群分析链路。默认 20 分钟。"
+            },
+            "union_wait_timeout_minutes": {
+                "type": "int",
+                "description": "固定时间模式就绪等待超时",
+                "default": 20,
+                "hint": "到达 union_report_time 后，如果仍有源群日报未就绪，最多继续等待多少分钟。超过后本次跨群日报将跳过。默认 20 分钟。"
             }
         }
     },

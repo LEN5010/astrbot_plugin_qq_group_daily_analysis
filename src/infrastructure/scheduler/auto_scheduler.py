@@ -56,6 +56,7 @@ class AutoScheduler:
         self._last_union_report_date: str | None = None
         self._union_report_guard = asyncio.Lock()
         self._union_report_dates_in_progress: set[str] = set()
+        self._union_prepare_results: dict[str, dict[str, Any]] = {}
 
         # Cache: platform_id:group_id -> group_name (populated lazily)
         self._group_name_cache: dict[str, str] = {}
@@ -284,7 +285,7 @@ class AutoScheduler:
         logger.info(f"增量调度注册完成: {len(trigger_times)} 个增量分析任务")
 
     def _schedule_union_report_time_job(self, scheduler):
-        """在固定时间注册跨群聚合日报任务。"""
+        """在固定时间注册跨群聚合日报任务和提前准备任务。"""
         time_str = self.config_manager.get_union_report_time()
         if not time_str:
             return
@@ -292,7 +293,9 @@ class AutoScheduler:
         try:
             normalized = str(time_str).replace("：", ":").strip()
             hour, minute = normalized.split(":")
-            trigger = CronTrigger(hour=int(hour), minute=int(minute))
+            publish_hour = int(hour)
+            publish_minute = int(minute)
+            trigger = CronTrigger(hour=publish_hour, minute=publish_minute)
             job_id = "astrbot_plugin_union_daily_report_trigger"
 
             scheduler.add_job(
@@ -304,8 +307,38 @@ class AutoScheduler:
             )
             self.scheduler_job_ids.append(job_id)
             logger.info(f"已注册跨群聚合日报固定任务: {normalized} (Job ID: {job_id})")
+
+            lead_minutes = max(0, self.config_manager.get_union_prepare_lead_minutes())
+            prepare_hour, prepare_minute = self._shift_clock_time(
+                publish_hour,
+                publish_minute,
+                -lead_minutes,
+            )
+            prepare_trigger = CronTrigger(hour=prepare_hour, minute=prepare_minute)
+            prepare_job_id = "astrbot_plugin_union_daily_report_prepare_trigger"
+            scheduler.add_job(
+                self._run_union_prepare_on_schedule,
+                trigger=prepare_trigger,
+                id=prepare_job_id,
+                replace_existing=True,
+                misfire_grace_time=60,
+            )
+            self.scheduler_job_ids.append(prepare_job_id)
+            logger.info(
+                "已注册跨群聚合日报准备任务: %02d:%02d (提前 %d 分钟, Job ID: %s)",
+                prepare_hour,
+                prepare_minute,
+                lead_minutes,
+                prepare_job_id,
+            )
         except Exception as e:
             logger.error(f"注册跨群聚合日报固定任务失败 ({time_str}): {e}")
+
+    @staticmethod
+    def _shift_clock_time(hour: int, minute: int, delta_minutes: int) -> tuple[int, int]:
+        """对 HH:MM 做分钟偏移，结果按 24 小时制回绕。"""
+        total_minutes = (hour * 60 + minute + delta_minutes) % (24 * 60)
+        return total_minutes // 60, total_minutes % 60
 
     def unschedule_jobs(self, context):
         """取消定时任务"""
@@ -489,28 +522,34 @@ class AutoScheduler:
         group_id: str,
         target_platform_id: str | None = None,
         archive_date: str | None = None,
+        dispatch_report: bool = True,
     ):
         """为指定群执行自动分析（带超时控制）"""
         try:
             # 为每个群聊设置独立的超时时间，适当放宽到 30 分钟以支持大型批次
-            await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._perform_auto_analysis_for_group(
                     group_id,
                     target_platform_id,
                     archive_date,
+                    dispatch_report=dispatch_report,
                 ),
                 timeout=1800,
             )
+            return result
         except asyncio.TimeoutError:
             logger.error(f"群 {group_id} 分析超时（30分钟），跳过该群分析")
+            return {"success": False, "reason": "timeout"}
         except Exception as e:
             logger.error(f"群 {group_id} 分析任务执行失败: {e}")
+            return {"success": False, "reason": str(e)}
 
     async def _perform_auto_analysis_for_group(
         self,
         group_id: str,
         target_platform_id: str | None = None,
         archive_date: str | None = None,
+        dispatch_report: bool = True,
     ):
         """为指定群执行自动分析（业务逻辑委派给 AnalysisApplicationService）"""
         try:
@@ -520,7 +559,7 @@ class AutoScheduler:
             TraceContext.set(trace_id)
 
             if self._terminating:
-                return
+                return {"success": False, "reason": "terminating"}
 
             logger.info(
                 f"开始为群 {group_id} 执行自动分析 (Platform: {target_platform_id or 'Auto'})"
@@ -529,7 +568,7 @@ class AutoScheduler:
             # 检查平台状态 (BotManager 为基础设施层，用于获取平台就绪状态)
             if not self.bot_manager.is_ready_for_auto_analysis():
                 logger.warning(f"群 {group_id} 自动分析跳过：bot管理器未就绪")
-                return
+                return {"success": False, "reason": "bot_not_ready"}
 
             # 委派给应用层服务执行核心用例
             # AnalysisApplicationService 内部已处理群锁 (group_lock)
@@ -543,22 +582,26 @@ class AutoScheduler:
             if not result.get("success"):
                 reason = result.get("reason")
                 logger.info(f"群 {group_id} 自动分析跳过: {reason}")
-                return
+                return result
 
-            # 获取分析结果及适配器
-            analysis_result = result["analysis_result"]
-            adapter = result["adapter"]
+            if dispatch_report:
+                # 获取分析结果及适配器
+                analysis_result = result["analysis_result"]
+                adapter = result["adapter"]
 
-            # 调度导出并发送报告
-            await self.report_dispatcher.dispatch(
-                group_id,
-                analysis_result,
-                adapter.platform_id
-                if hasattr(adapter, "platform_id")
-                else target_platform_id,
-            )
+                # 调度导出并发送报告
+                await self.report_dispatcher.dispatch(
+                    group_id,
+                    analysis_result,
+                    adapter.platform_id
+                    if hasattr(adapter, "platform_id")
+                    else target_platform_id,
+                )
+            else:
+                logger.info("群 %s 自动分析已完成，仅做联合日报准备，不发送单群日报", group_id)
 
             logger.info(f"群 {group_id} 自动分析任务执行成功")
+            return result
 
         except DuplicateGroupTaskError:
             # group_lock 抛出的 DuplicateGroupTaskError 表示任务正在运行，优雅跳过
@@ -566,6 +609,7 @@ class AutoScheduler:
             raise  # 重新抛出，让上层知道任务并没真正执行而是跳过了
         except Exception as e:
             logger.error(f"群 {group_id} 自动分析执行失败: {e}", exc_info=True)
+            return {"success": False, "reason": str(e)}
         finally:
             logger.debug(f"群 {group_id} 自动分析流程结束")
 
@@ -740,6 +784,7 @@ class AutoScheduler:
         group_id: str,
         target_platform_id: str | None = None,
         archive_date: str | None = None,
+        dispatch_report: bool = True,
     ):
         """带超时及回退机制的增量最终报告生成。
 
@@ -749,7 +794,10 @@ class AutoScheduler:
         try:
             result = await asyncio.wait_for(
                 self._perform_incremental_final_report_for_group(
-                    group_id, target_platform_id, archive_date
+                    group_id,
+                    target_platform_id,
+                    archive_date,
+                    dispatch_report=dispatch_report,
                 ),
                 timeout=1800,
             )
@@ -765,7 +813,10 @@ class AutoScheduler:
                         f"正在回退到传统全量分析..."
                     )
                     return await self._fallback_to_traditional(
-                        group_id, target_platform_id, archive_date
+                        group_id,
+                        target_platform_id,
+                        archive_date,
+                        dispatch_report=dispatch_report,
                     )
 
             return result
@@ -778,6 +829,7 @@ class AutoScheduler:
                     group_id,
                     target_platform_id,
                     archive_date,
+                    dispatch_report=dispatch_report,
                 )
             return {"success": False, "reason": "timeout"}
 
@@ -789,6 +841,7 @@ class AutoScheduler:
                     group_id,
                     target_platform_id,
                     archive_date,
+                    dispatch_report=dispatch_report,
                 )
             return {"success": False, "reason": str(e)}
 
@@ -797,6 +850,7 @@ class AutoScheduler:
         group_id: str,
         target_platform_id: str | None = None,
         archive_date: str | None = None,
+        dispatch_report: bool = True,
     ):
         """回退操作：在增量报告失败时，执行传统的全量拉取分析。"""
         try:
@@ -804,9 +858,14 @@ class AutoScheduler:
                 f"⬆️ 群 {group_id} 回退到传统全量分析 "
                 f"(Platform: {target_platform_id or 'Auto'})"
             )
-            await self._perform_auto_analysis_for_group_with_timeout(
-                group_id, target_platform_id, archive_date
+            result = await self._perform_auto_analysis_for_group_with_timeout(
+                group_id,
+                target_platform_id,
+                archive_date,
+                dispatch_report=dispatch_report,
             )
+            if isinstance(result, dict) and not result.get("success", False):
+                return result
             return {"success": True, "fallback": True}
         except Exception as fallback_err:
             logger.error(
@@ -820,6 +879,7 @@ class AutoScheduler:
         group_id: str,
         target_platform_id: str | None = None,
         archive_date: str | None = None,
+        dispatch_report: bool = True,
     ):
         """为指定群生成增量最终报告（业务逻辑委派给 AnalysisApplicationService）"""
         try:
@@ -829,7 +889,7 @@ class AutoScheduler:
             TraceContext.set(trace_id)
 
             if self._terminating:
-                return
+                return {"success": False, "reason": "terminating"}
 
             logger.info(
                 f"开始为群 {group_id} 生成增量最终报告 "
@@ -854,37 +914,43 @@ class AutoScheduler:
                 logger.info(f"群 {group_id} 最终报告跳过: {reason}")
                 return result
 
-            # 获取分析结果及适配器，分发报告
-            analysis_result = result["analysis_result"]
-            adapter = result["adapter"]
+            if dispatch_report:
+                # 获取分析结果及适配器，分发报告
+                analysis_result = result["analysis_result"]
+                adapter = result["adapter"]
 
-            await self.report_dispatcher.dispatch(
-                group_id,
-                analysis_result,
-                adapter.platform_id
-                if hasattr(adapter, "platform_id")
-                else target_platform_id,
-            )
-
-            # 清理过期批次（保留 2 倍窗口范围的数据作为缓冲）
-            try:
-                analysis_days = self.config_manager.get_analysis_days()
-                before_ts = time_mod.time() - (analysis_days * 2 * 24 * 3600)
-                incremental_store = self.analysis_service.incremental_store
-                if incremental_store:
-                    cleaned = await incremental_store.cleanup_old_batches(
-                        group_id, before_ts
-                    )
-                    if cleaned > 0:
-                        logger.info(
-                            f"群 {group_id} 报告发送后清理了 {cleaned} 个过期批次"
-                        )
-            except Exception as cleanup_err:
-                logger.warning(
-                    f"群 {group_id} 过期批次清理失败（不影响报告）: {cleanup_err}"
+                await self.report_dispatcher.dispatch(
+                    group_id,
+                    analysis_result,
+                    adapter.platform_id
+                    if hasattr(adapter, "platform_id")
+                    else target_platform_id,
                 )
 
-            logger.info(f"群 {group_id} 增量最终报告发送成功")
+                # 清理过期批次（保留 2 倍窗口范围的数据作为缓冲）
+                try:
+                    analysis_days = self.config_manager.get_analysis_days()
+                    before_ts = time_mod.time() - (analysis_days * 2 * 24 * 3600)
+                    incremental_store = self.analysis_service.incremental_store
+                    if incremental_store:
+                        cleaned = await incremental_store.cleanup_old_batches(
+                            group_id, before_ts
+                        )
+                        if cleaned > 0:
+                            logger.info(
+                                f"群 {group_id} 报告发送后清理了 {cleaned} 个过期批次"
+                            )
+                except Exception as cleanup_err:
+                    logger.warning(
+                        f"群 {group_id} 过期批次清理失败（不影响报告）: {cleanup_err}"
+                    )
+            else:
+                logger.info("群 %s 增量最终报告已完成，仅做联合日报准备，不发送单群日报", group_id)
+
+            if dispatch_report:
+                logger.info(f"群 {group_id} 增量最终报告发送成功")
+            else:
+                logger.info(f"群 {group_id} 增量最终报告准备成功")
             return result
 
         except DuplicateGroupTaskError:
@@ -910,6 +976,7 @@ class AutoScheduler:
             report_date=report_date,
             apply_delay=True,
             target_groups_override=None,
+            require_all_groups_ready=False,
         )
 
     async def _run_union_report_on_schedule(self) -> None:
@@ -921,16 +988,39 @@ class AutoScheduler:
             report_date=report_date,
             apply_delay=False,
             target_groups_override=None,
+            require_all_groups_ready=True,
         )
+
+    async def _run_union_prepare_on_schedule(self) -> None:
+        """固定时间模式下，提前触发 union 源群的单群链路。"""
+        if self._terminating or not self.config_manager.get_union_report_enabled():
+            return
+
+        report_date = datetime.now().strftime("%Y-%m-%d")
+        result = await self._run_union_prepare_core(report_date)
+        if not result.get("success"):
+            logger.warning(
+                "跨群日报准备任务失败: date=%s reason=%s",
+                report_date,
+                result.get("reason", "unknown"),
+            )
+
+    async def run_union_prepare_manual(self, report_date: str) -> dict[str, Any]:
+        """手动触发 union 源群的单群链路准备。"""
+        return await self._run_union_prepare_core(report_date)
 
     async def run_union_report_manual(
         self,
         report_date: str,
         target_groups_override: list[tuple[str, str | None]],
     ) -> dict[str, Any]:
-        """手动触发跨群聚合日报，用于命令测试。"""
+        """手动触发跨群聚合日报全链路，用于命令测试。"""
         if not target_groups_override:
             return {"success": False, "reason": "no_targets"}
+
+        prepare_result = await self.run_union_prepare_manual(report_date)
+        if not prepare_result.get("success"):
+            return prepare_result
 
         return await self._run_union_report_core(
             report_date=report_date,
@@ -938,7 +1028,86 @@ class AutoScheduler:
             target_groups_override=target_groups_override,
             skip_enabled_check=True,
             bypass_daily_guard=True,
+            require_all_groups_ready=True,
         )
+
+    async def _run_union_prepare_core(self, report_date: str) -> dict[str, Any]:
+        """执行 union 源群单群链路，供固定时间和手动测试共用。"""
+        target_list = await self._get_union_source_targets()
+        if not target_list:
+            logger.info("跨群日报准备任务跳过：没有可用的 union 源群")
+            result = {"success": False, "reason": "no_source_groups"}
+            self._union_prepare_results[report_date] = result
+            return result
+
+        max_concurrent = self.config_manager.get_max_concurrent_tasks()
+        sem = asyncio.Semaphore(max_concurrent)
+        logger.info(
+            "跨群日报准备任务开始：date=%s 目标群=%d 并发限制=%d",
+            report_date,
+            len(target_list),
+            max_concurrent,
+        )
+
+        async def dispatch_group(
+            gid: str, pid: str | None, mode: str
+        ) -> dict[str, Any] | None:
+            async with sem:
+                if mode == "incremental":
+                    return await self._perform_incremental_final_report_for_group_with_timeout(
+                        gid,
+                        pid,
+                        report_date,
+                        dispatch_report=False,
+                    )
+                return await self._perform_auto_analysis_for_group_with_timeout(
+                    gid,
+                    pid,
+                    report_date,
+                    dispatch_report=False,
+                )
+
+        tasks = [
+            asyncio.create_task(
+                dispatch_group(gid, pid, mode),
+                name=f"union_prepare_{mode}_{gid}",
+            )
+            for gid, pid, mode, _group_ref in target_list
+        ]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        success_count = 0
+        skip_count = 0
+        error_count = 0
+
+        for result in results:
+            if isinstance(result, Exception):
+                error_count += 1
+            elif isinstance(result, dict) and not result.get("success", True):
+                skip_count += 1
+            else:
+                success_count += 1
+
+        result_summary: dict[str, Any] = {
+            "success": success_count > 0,
+            "prepared_count": len(target_list),
+            "success_count": success_count,
+            "skip_count": skip_count,
+            "error_count": error_count,
+        }
+        if success_count == 0:
+            result_summary["reason"] = "prepare_failed"
+
+        logger.info(
+            "跨群日报准备任务完成 — date=%s 成功=%d 跳过=%d 失败=%d 总计=%d",
+            report_date,
+            success_count,
+            skip_count,
+            error_count,
+            len(target_list),
+        )
+        self._union_prepare_results[report_date] = result_summary
+        return result_summary
 
     async def _run_union_report_core(
         self,
@@ -947,6 +1116,7 @@ class AutoScheduler:
         target_groups_override: list[tuple[str, str | None]] | None,
         skip_enabled_check: bool = False,
         bypass_daily_guard: bool = False,
+        require_all_groups_ready: bool = False,
     ) -> dict[str, Any]:
         """
         执行跨群聚合日报的核心流程。
@@ -978,6 +1148,43 @@ class AutoScheduler:
             if not source_group_refs:
                 logger.info("跨群聚合日报跳过：未配置 union_groups_list")
                 return {"success": False, "reason": "no_source_groups"}
+
+            prepare_result = self._union_prepare_results.get(report_date)
+            if require_all_groups_ready and prepare_result and not prepare_result.get(
+                "success", False
+            ):
+                logger.warning(
+                    "跨群聚合日报跳过：源群准备阶段已失败。date=%s prepare=%s",
+                    report_date,
+                    prepare_result,
+                )
+                return {
+                    "success": False,
+                    "reason": prepare_result.get("reason", "prepare_failed"),
+                    "prepare_result": prepare_result,
+                }
+
+            if require_all_groups_ready:
+                wait_timeout_minutes = max(
+                    0,
+                    self.config_manager.get_union_wait_timeout_minutes(),
+                )
+                missing_group_refs = await self._wait_for_union_source_reports_ready(
+                    source_group_refs,
+                    report_date,
+                    wait_timeout_minutes,
+                )
+                if missing_group_refs:
+                    logger.warning(
+                        "跨群聚合日报跳过：固定时间触发后等待超时，仍有源群日报未就绪。date=%s missing=%s",
+                        report_date,
+                        missing_group_refs,
+                    )
+                    return {
+                        "success": False,
+                        "reason": "source_reports_not_ready",
+                        "missing_groups": missing_group_refs,
+                    }
 
             delay_minutes = max(0, self.config_manager.get_union_report_delay_minutes())
             if apply_delay and delay_minutes > 0:
@@ -1173,6 +1380,78 @@ class AutoScheduler:
         if platform_id:
             return f"{platform_id}:GroupMessage:{group_id}"
         return group_id
+
+    async def _get_union_source_targets(
+        self,
+    ) -> list[tuple[str, str | None, str, str]]:
+        """解析 union 源群及其单群执行模式。"""
+        source_group_refs = await self._normalize_union_group_refs(
+            self.config_manager.get_union_groups_list()
+        )
+        if not source_group_refs:
+            return []
+
+        incr_list = self.config_manager.get_incremental_group_list()
+        incr_list_mode = self.config_manager.get_incremental_group_list_mode()
+        targets: list[tuple[str, str | None, str, str]] = []
+
+        for group_ref in source_group_refs:
+            platform_id, group_id = self._parse_union_group_ref(group_ref)
+            if not group_id:
+                continue
+            mode = (
+                "incremental"
+                if self.config_manager.is_group_in_filtered_list(
+                    group_ref,
+                    incr_list_mode,
+                    incr_list,
+                )
+                else "traditional"
+            )
+            targets.append((group_id, platform_id, mode, group_ref))
+
+        return targets
+
+    async def _wait_for_union_source_reports_ready(
+        self,
+        source_group_refs: list[str],
+        report_date: str,
+        wait_timeout_minutes: int,
+    ) -> list[str]:
+        """等待 union 源群日报就绪，直到全部完成或超时。"""
+        missing_group_refs = self.union_daily_report_service.get_missing_group_refs_for_date(
+            source_group_refs,
+            report_date,
+        )
+        if not missing_group_refs:
+            return []
+
+        timeout_seconds = wait_timeout_minutes * 60
+        if timeout_seconds <= 0:
+            return missing_group_refs
+
+        poll_interval_seconds = 30
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        logger.info(
+            "跨群聚合日报等待源群就绪，最多 %d 分钟。当前缺失: %s",
+            wait_timeout_minutes,
+            missing_group_refs,
+        )
+
+        while missing_group_refs and not self._terminating:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+
+            await asyncio.sleep(min(poll_interval_seconds, remaining))
+            missing_group_refs = (
+                self.union_daily_report_service.get_missing_group_refs_for_date(
+                    source_group_refs,
+                    report_date,
+                )
+            )
+
+        return missing_group_refs
 
     # ================================================================
     # 群列表获取（基础设施层）

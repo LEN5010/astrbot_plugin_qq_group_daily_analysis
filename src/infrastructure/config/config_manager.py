@@ -765,6 +765,18 @@ class ConfigManager:
         """获取跨群日报固定发送时间。为空表示使用延迟模式。"""
         return str(self._get_group("union_report").get("union_report_time", "")).strip()
 
+    def get_union_prepare_lead_minutes(self) -> int:
+        """获取固定时间模式下，提前启动单群链路的分钟数。"""
+        return int(
+            self._get_group("union_report").get("union_prepare_lead_minutes", 20)
+        )
+
+    def get_union_wait_timeout_minutes(self) -> int:
+        """获取固定时间模式下，等待所有源群日报就绪的超时时间。"""
+        return int(
+            self._get_group("union_report").get("union_wait_timeout_minutes", 20)
+        )
+
     def save_config(self):
         """保存配置到AstrBot配置系统"""
         try:
