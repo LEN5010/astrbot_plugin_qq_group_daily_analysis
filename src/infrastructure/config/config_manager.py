@@ -218,6 +218,10 @@ class ConfigManager:
         """获取金句分析专用 Provider ID"""
         return self._get_group("llm").get("golden_quote_provider_id", "")
 
+    def get_union_report_provider_id(self) -> str:
+        """获取跨群聚合日报专用 Provider ID"""
+        return self._get_group("llm").get("union_report_provider_id", "")
+
     def get_keep_original_persona(self) -> bool:
         """获取是否继承会话原始人格设定"""
         return self._get_group("analysis_features").get("keep_original_persona", False)
@@ -310,6 +314,18 @@ class ConfigManager:
             return prompt
         return ""
 
+    def get_union_daily_analysis_prompt(
+        self, style: str = "union_daily_report_prompt"
+    ) -> str:
+        """获取跨群聚合日报提示词模板"""
+        prompts_config = self._get_group("prompts").get(
+            "union_daily_report_prompts", {}
+        )
+        prompt = prompts_config.get(style, "")
+        if prompt:
+            return prompt
+        return ""
+
     def set_quality_analysis_prompt(self, prompt: str):
         """设置聊天质量分析提示词模板"""
         prompts = self._ensure_group("prompts")
@@ -326,6 +342,7 @@ class ConfigManager:
             "topic_analysis_prompts",
             "user_title_analysis_prompts",
             "golden_quote_analysis_prompts",
+            "union_daily_report_prompts",
         ):
             target_group = self._get_group("prompts").get(group, {})
         else:
@@ -372,6 +389,11 @@ class ConfigManager:
             "golden_quote_analysis_prompts",
             "golden_quote_v2_prompt",
             self.set_golden_quote_analysis_prompt,
+        )
+        modified |= self._upgrade_config_item(
+            "union_daily_report_prompts",
+            "union_daily_report_prompt",
+            self.set_union_daily_analysis_prompt,
         )
 
         # 2. 文件名格式升级
@@ -425,6 +447,14 @@ class ConfigManager:
         if "golden_quote_analysis_prompts" not in prompts:
             prompts["golden_quote_analysis_prompts"] = {}
         prompts["golden_quote_analysis_prompts"]["golden_quote_v2_prompt"] = prompt
+        self.config.save_config()
+
+    def set_union_daily_analysis_prompt(self, prompt: str):
+        """设置跨群聚合日报提示词模板"""
+        prompts = self._ensure_group("prompts")
+        if "union_daily_report_prompts" not in prompts:
+            prompts["union_daily_report_prompts"] = {}
+        prompts["union_daily_report_prompts"]["union_daily_report_prompt"] = prompt
         self.config.save_config()
 
     def set_output_format(self, format_type: str):
@@ -712,6 +742,28 @@ class ConfigManager:
     def get_incremental_stagger_seconds(self) -> int:
         """获取多群增量分析的交错间隔（秒），避免 API 压力"""
         return self._get_group("incremental").get("incremental_stagger_seconds", 30)
+
+    # ========== 跨群聚合日报配置 ==========
+
+    def get_union_report_enabled(self) -> bool:
+        """获取是否启用跨群聚合日报。"""
+        return bool(self._get_group("union_report").get("enabled", False))
+
+    def get_union_groups_list(self) -> list[str]:
+        """获取跨群聚合的源群列表。"""
+        return self._get_group("union_report").get("union_groups_list", [])
+
+    def get_union_target_groups(self) -> list[str]:
+        """获取跨群日报的发送目标列表。为空时回退到 union_groups_list。"""
+        return self._get_group("union_report").get("union_target_groups", [])
+
+    def get_union_report_delay_minutes(self) -> int:
+        """获取单群日报完成后，跨群日报的延迟执行分钟数。"""
+        return int(self._get_group("union_report").get("union_report_delay_minutes", 5))
+
+    def get_union_report_time(self) -> str:
+        """获取跨群日报固定发送时间。为空表示使用延迟模式。"""
+        return str(self._get_group("union_report").get("union_report_time", "")).strip()
 
     def save_config(self):
         """保存配置到AstrBot配置系统"""

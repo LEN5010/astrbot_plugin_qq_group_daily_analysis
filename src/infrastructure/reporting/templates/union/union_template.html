@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>五群联合日报</title>
+    <style>
+        :root {
+            --bg: #f4efe6;
+            --paper: rgba(255, 251, 244, 0.94);
+            --ink: #241f1a;
+            --muted: #6d6359;
+            --line: rgba(36, 31, 26, 0.1);
+            --accent: #c85c36;
+            --accent-soft: rgba(200, 92, 54, 0.12);
+            --champion: #1f4b45;
+            --card-shadow: 0 24px 60px rgba(48, 34, 22, 0.14);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, rgba(200, 92, 54, 0.18), transparent 34%),
+                radial-gradient(circle at top right, rgba(31, 75, 69, 0.16), transparent 28%),
+                linear-gradient(180deg, #f7f1e6 0%, #efe6d8 100%);
+            padding: 36px;
+        }
+
+        .page {
+            width: 1180px;
+            margin: 0 auto;
+            background: var(--paper);
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            border-radius: 32px;
+            box-shadow: var(--card-shadow);
+            overflow: hidden;
+        }
+
+        .hero {
+            padding: 42px 48px 28px;
+            background:
+                linear-gradient(135deg, rgba(31, 75, 69, 0.95), rgba(17, 23, 31, 0.92)),
+                linear-gradient(120deg, rgba(200, 92, 54, 0.4), transparent);
+            color: #f9f4ec;
+        }
+
+        .eyebrow {
+            letter-spacing: 0.28em;
+            font-size: 13px;
+            opacity: 0.78;
+            text-transform: uppercase;
+            margin-bottom: 16px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 46px;
+            line-height: 1.1;
+        }
+
+        .hero-meta {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-top: 18px;
+        }
+
+        .hero-pill {
+            padding: 10px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            font-size: 14px;
+        }
+
+        .content {
+            padding: 34px 40px 42px;
+        }
+
+        .section {
+            margin-top: 26px;
+        }
+
+        .section-title {
+            margin: 0 0 16px;
+            font-size: 22px;
+            color: var(--champion);
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr 0.8fr;
+            gap: 16px;
+        }
+
+        .card {
+            border-radius: 24px;
+            padding: 22px;
+            background: #fffaf2;
+            border: 1px solid var(--line);
+        }
+
+        .champion-card {
+            background:
+                linear-gradient(135deg, rgba(31, 75, 69, 0.96), rgba(26, 45, 51, 0.92));
+            color: #f4efe7;
+        }
+
+        .champion-label,
+        .stat-label,
+        .quote-meta,
+        .topic-meta {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .champion-card .champion-label,
+        .champion-card .stat-label {
+            color: rgba(244, 239, 231, 0.7);
+        }
+
+        .champion-name {
+            margin-top: 12px;
+            font-size: 30px;
+            font-weight: 700;
+        }
+
+        .champion-value {
+            margin-top: 10px;
+            font-size: 54px;
+            font-weight: 800;
+            line-height: 1;
+        }
+
+        .stat-value {
+            margin-top: 10px;
+            font-size: 34px;
+            font-weight: 700;
+        }
+
+        .overview-card {
+            background: linear-gradient(180deg, rgba(200, 92, 54, 0.08), rgba(200, 92, 54, 0.02));
+        }
+
+        .overview-text {
+            margin: 0;
+            font-size: 17px;
+            line-height: 1.85;
+        }
+
+        .list-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .quote-card {
+            background: white;
+        }
+
+        .quote-rank {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: var(--accent);
+            color: white;
+            font-weight: 700;
+            font-size: 15px;
+        }
+
+        .quote-content {
+            margin: 16px 0 18px;
+            font-size: 19px;
+            line-height: 1.75;
+            min-height: 168px;
+        }
+
+        .quote-meta strong,
+        .topic-title strong,
+        .champion-name strong {
+            color: inherit;
+        }
+
+        .group-table {
+            display: grid;
+            gap: 10px;
+        }
+
+        .group-row {
+            display: grid;
+            grid-template-columns: 1.3fr 0.7fr 0.7fr 0.7fr;
+            gap: 12px;
+            align-items: center;
+            padding: 14px 16px;
+            border-radius: 18px;
+            background: white;
+            border: 1px solid var(--line);
+        }
+
+        .group-row.highlight {
+            background: rgba(31, 75, 69, 0.08);
+            border-color: rgba(31, 75, 69, 0.18);
+        }
+
+        .group-name {
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .group-id {
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+
+        .topic-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .topic-card {
+            background: white;
+        }
+
+        .topic-title {
+            margin: 0 0 10px;
+            font-size: 18px;
+        }
+
+        .topic-detail {
+            margin: 10px 0 0;
+            color: #40372f;
+            font-size: 15px;
+            line-height: 1.75;
+        }
+
+        .footer {
+            margin-top: 28px;
+            padding-top: 18px;
+            border-top: 1px dashed var(--line);
+            font-size: 13px;
+            color: var(--muted);
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <section class="hero">
+            <div class="eyebrow">Union Daily Report</div>
+            <h1>五群联合日报</h1>
+            <div class="hero-meta">
+                <div class="hero-pill">日期 {{ report.report_date }}</div>
+                <div class="hero-pill">覆盖 {{ report.group_snapshots|length }} 个群</div>
+                <div class="hero-pill">累计 {{ report.total_messages }} 条消息</div>
+                <div class="hero-pill">累计 {{ report.total_participants }} 人参与</div>
+            </div>
+        </section>
+
+        <main class="content">
+            <section class="section">
+                <div class="summary-grid">
+                    <article class="card champion-card">
+                        <div class="champion-label">今日最活跃冠军群</div>
+                        <div class="champion-name">{{ report.champion_group.group_name }}</div>
+                        <div class="group-id">
+                            {{ report.champion_group.group_id }}
+                            {% if report.champion_group.platform_id %}
+                            · {{ report.champion_group.platform_id }}
+                            {% endif %}
+                        </div>
+                        <div class="champion-value">{{ report.champion_group.total_messages }}</div>
+                        <div class="stat-label">messages today</div>
+                    </article>
+                    <article class="card">
+                        <div class="stat-label">累计消息数</div>
+                        <div class="stat-value">{{ report.total_messages }}</div>
+                    </article>
+                    <article class="card">
+                        <div class="stat-label">累计参与人数</div>
+                        <div class="stat-value">{{ report.total_participants }}</div>
+                    </article>
+                </div>
+            </section>
+
+            <section class="section">
+                <article class="card overview-card">
+                    <h2 class="section-title">全局点评</h2>
+                    <p class="overview-text">{{ report.overview }}</p>
+                </article>
+            </section>
+
+            <section class="section">
+                <h2 class="section-title">跨群 Top 3 金句</h2>
+                <div class="list-grid">
+                    {% for quote in report.top_quotes %}
+                    <article class="card quote-card">
+                        <span class="quote-rank">{{ loop.index }}</span>
+                        <div class="quote-content">“{{ quote.content }}”</div>
+                        <div class="quote-meta">
+                            <div><strong>{{ quote.sender }}</strong></div>
+                            <div>
+                                {{ quote.group_name }} · {{ quote.group_id }}
+                                {% if quote.platform_id %}
+                                · {{ quote.platform_id }}
+                                {% endif %}
+                            </div>
+                            <div>{{ quote.reason }}</div>
+                        </div>
+                    </article>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="section">
+                <h2 class="section-title">群活跃度横向对比</h2>
+                <div class="group-table">
+                    {% for group in report.group_snapshots %}
+                    <div class="group-row{% if group.group_id == report.champion_group.group_id %} highlight{% endif %}">
+                        <div>
+                            <div class="group-name">{{ group.group_name }}</div>
+                            <div class="group-id">
+                                {{ group.group_id }}
+                                {% if group.platform_id %}
+                                · {{ group.platform_id }}
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div>
+                            <div class="stat-label">消息</div>
+                            <div>{{ group.total_messages }}</div>
+                        </div>
+                        <div>
+                            <div class="stat-label">参与人数</div>
+                            <div>{{ group.participant_count }}</div>
+                        </div>
+                        <div>
+                            <div class="stat-label">话题 / 金句</div>
+                            <div>{{ group.topics_count }} / {{ group.golden_quotes_count }}</div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            {% if report.topic_highlights %}
+            <section class="section">
+                <h2 class="section-title">跨群热议片段</h2>
+                <div class="topic-grid">
+                    {% for topic in report.topic_highlights %}
+                    <article class="card topic-card">
+                        <h3 class="topic-title">{{ topic.topic }}</h3>
+                        <div class="topic-meta">
+                            {{ topic.group_name }} · {{ topic.group_id }}
+                            {% if topic.platform_id %}
+                            · {{ topic.platform_id }}
+                            {% endif %}
+                            {% if topic.contributors %}
+                            · {{ topic.contributors|join('、') }}
+                            {% endif %}
+                        </div>
+                        <p class="topic-detail">{{ topic.detail }}</p>
+                    </article>
+                    {% endfor %}
+                </div>
+            </section>
+            {% endif %}
+
+            <div class="footer">
+                <div>Generated by astrbot_plugin_qq_group_daily_analysis</div>
+                <div>
+                    {% if report.missing_groups %}
+                    缺失群：{{ report.missing_groups|join('、') }}
+                    {% else %}
+                    所有目标群均已纳入聚合
+                    {% endif %}
+                </div>
+            </div>
+        </main>
+    </div>
+</body>
+</html>

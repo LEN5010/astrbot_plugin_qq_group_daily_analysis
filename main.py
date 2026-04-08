@@ -8,6 +8,7 @@
 import asyncio
 import os
 from collections.abc import AsyncGenerator
+from datetime import datetime
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig
@@ -27,6 +28,9 @@ from .src.application.services.analysis_application_service import (
 from .src.application.services.message_processing_service import (
     MessageProcessingService,
 )
+from .src.application.services.union_daily_report_service import (
+    UnionDailyReportService,
+)
 from .src.domain.services.analysis_domain_service import AnalysisDomainService
 from .src.domain.services.incremental_merge_service import IncrementalMergeService
 from .src.domain.services.statistics_service import StatisticsService
@@ -34,6 +38,7 @@ from .src.infrastructure.analysis.llm_analyzer import LLMAnalyzer
 from .src.infrastructure.config.config_manager import ConfigManager
 from .src.infrastructure.messaging.message_sender import MessageSender
 from .src.infrastructure.persistence.history_manager import HistoryManager
+from .src.infrastructure.persistence.history_repository import HistoryRepository
 from .src.infrastructure.persistence.incremental_store import IncrementalStore
 from .src.infrastructure.persistence.telegram_group_registry import (
     TelegramGroupRegistry,
@@ -58,11 +63,13 @@ class GroupDailyAnalysis(Star):
     config_manager: ConfigManager
     bot_manager: BotManager
     history_manager: HistoryManager
+    history_repository: HistoryRepository
     report_generator: ReportGenerator
     telegram_group_registry: TelegramGroupRegistry
     statistics_service: StatisticsService
     analysis_domain_service: AnalysisDomainService
     llm_analyzer: LLMAnalyzer
+    union_daily_report_service: UnionDailyReportService
     incremental_store: IncrementalStore
     incremental_merge_service: IncrementalMergeService
     analysis_service: AnalysisApplicationService
@@ -99,6 +106,7 @@ class GroupDailyAnalysis(Star):
             )
 
         self.report_generator = ReportGenerator(self.config_manager, plugin_data_dir)
+        self.history_repository = HistoryRepository(str(plugin_data_dir))
 
         # Telegram 注册表 (持久层)
         self.telegram_group_registry = TelegramGroupRegistry(self)
@@ -109,6 +117,11 @@ class GroupDailyAnalysis(Star):
 
         # 3. 分析核心 (LLM Bridge)
         self.llm_analyzer = LLMAnalyzer(context, self.config_manager)
+        self.union_daily_report_service = UnionDailyReportService(
+            self.config_manager,
+            self.history_repository,
+            context,
+        )
 
         # 4. 增量分析组件
         self.incremental_store = IncrementalStore(self)
@@ -119,6 +132,7 @@ class GroupDailyAnalysis(Star):
             self.config_manager,
             self.bot_manager,
             self.history_manager,
+            self.history_repository,
             self.report_generator,
             self.llm_analyzer,
             self.statistics_service,
@@ -151,6 +165,7 @@ class GroupDailyAnalysis(Star):
             self.report_generator,
             self.html_render,
             plugin_instance=self,
+            union_daily_report_service=self.union_daily_report_service,
         )
 
         # 同步全局限流并进行初始化配置
@@ -885,6 +900,8 @@ class GroupDailyAnalysis(Star):
 
             output_format = self.config_manager.get_output_format()
             min_threshold = self.config_manager.get_min_messages_threshold()
+            union_enabled = self.config_manager.get_union_report_enabled()
+            union_time = self.config_manager.get_union_report_time() or "延迟模式"
 
             # 增量分析状态
             incremental_enabled = self.config_manager.get_incremental_enabled()
@@ -906,13 +923,91 @@ class GroupDailyAnalysis(Star):
 • 群分析功能: {status} (模式: {mode})
 • 自动分析: {auto_status} ({auto_time})
 • 增量分析: {incremental_status_text}
+• 跨群日报: {"已启用" if union_enabled else "未启用"} ({union_time})
 • 调试模式: {debug_status} (增量立即报告)
 • 输出格式: {output_format}
 • 最小消息数: {min_threshold}
 
 💡 可用命令: enable, disable, status, reload, test, incremental_debug
 💡 支持的输出格式: image, text (图片包含活跃度可视化)
-💡 其他命令: /设置格式, /增量状态""")
+💡 其他命令: /设置格式, /增量状态, /联合日报测试""")
+
+    @filter.command("联合日报测试", alias={"union_report_test"})
+    @filter.permission_type(PermissionType.ADMIN)
+    async def union_report_test(
+        self,
+        event: AstrMessageEvent,
+        report_date: str = "",
+    ):
+        """
+        手动测试跨群聚合日报。
+        用法: /联合日报测试 [YYYY-MM-DD]
+
+        默认仅发送到当前群，避免误群发。
+        """
+        if self._terminating:
+            return
+
+        event.should_call_llm(True)
+        current_task = asyncio.current_task()
+        if current_task:
+            self._background_tasks.add(current_task)
+
+        try:
+            group_id = self._get_group_id_from_event(event)
+            platform_id = self._get_platform_id_from_event(event)
+
+            if not group_id:
+                yield event.plain_result("❌ 请在群聊中使用此命令")
+                return
+
+            target_date = report_date.strip() if report_date else ""
+            if target_date:
+                try:
+                    datetime.strptime(target_date, "%Y-%m-%d")
+                except ValueError:
+                    yield event.plain_result(
+                        "❌ 日期格式错误，请使用 YYYY-MM-DD，例如 /联合日报测试 2026-04-08"
+                    )
+                    return
+            else:
+                target_date = datetime.now().strftime("%Y-%m-%d")
+
+            self.bot_manager.update_from_event(event)
+            yield event.plain_result(
+                f"🧪 开始生成跨群聚合日报测试，日期: {target_date}，发送目标: 当前群"
+            )
+
+            result = await self.auto_scheduler.run_union_report_manual(
+                report_date=target_date,
+                target_groups_override=[(group_id, platform_id)],
+            )
+
+            if result.get("success"):
+                sent_count = result.get("sent_count", 0)
+                yield event.plain_result(
+                    f"✅ 跨群聚合日报测试完成，已发送到 {sent_count} 个目标（当前群）"
+                )
+                return
+
+            reason = result.get("reason", "unknown")
+            reason_map = {
+                "no_targets": "没有可用的发送目标",
+                "not_initialized": "union 报告组件未初始化完成",
+                "no_source_groups": "未配置 union_groups_list",
+                "no_report_data": "指定日期没有可聚合的单群日报 JSON",
+                "dispatch_failed": "报告已生成，但发送失败",
+                "disabled": "跨群日报功能未启用",
+            }
+            yield event.plain_result(
+                f"❌ 跨群聚合日报测试失败: {reason_map.get(reason, reason)}"
+            )
+        except Exception as e:
+            logger.error(f"跨群聚合日报测试失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 跨群聚合日报测试失败: {e}")
+        finally:
+            if current_task:
+                self._background_tasks.discard(current_task)
 
     @filter.command("增量状态", alias={"incremental_status"})
     @filter.permission_type(PermissionType.ADMIN)

@@ -34,6 +34,7 @@ class HistoryManager:
         analysis_result: dict[str, Any],
         date_str: str | None = None,
         time_str: str | None = None,
+        group_ref: str | None = None,
     ) -> bool:
         """
         序列化并存储一份分析报告摘要。
@@ -74,11 +75,14 @@ class HistoryManager:
                 "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
             }
 
-            key = f"analysis_{group_id}_{date_str}_{time_str}"
-            await self.plugin.put_kv_data(key, summary)
+            storage_key = self._build_storage_key(group_id, group_ref, date_str, time_str)
+            summary["group_id"] = group_id
+            summary["group_ref"] = group_ref or group_id
+
+            await self.plugin.put_kv_data(storage_key, summary)
 
             logger.info(
-                f"已保存群 {group_id} 在 {date_str} {time_str} 的分析摘要到历史记录 (Key: {key})"
+                f"已保存群 {group_id} 在 {date_str} {time_str} 的分析摘要到历史记录 (Key: {storage_key})"
             )
             return True
         except Exception as e:
@@ -86,18 +90,41 @@ class HistoryManager:
             return False
 
     async def get_history(
-        self, group_id: str, date_str: str, time_str: str
+        self,
+        group_id: str,
+        date_str: str,
+        time_str: str,
+        group_ref: str | None = None,
     ) -> dict[str, Any] | None:
         """
         根据群组、日期和时间点检索一份历史摘要。
         """
         time_str = time_str.replace(":", "-")
-        key = f"analysis_{group_id}_{date_str}_{time_str}"
+        key = self._build_storage_key(group_id, group_ref, date_str, time_str)
         return await self.plugin.get_kv_data(key, None)
 
-    async def has_history(self, group_id: str, date_str: str, time_str: str) -> bool:
+    async def has_history(
+        self,
+        group_id: str,
+        date_str: str,
+        time_str: str,
+        group_ref: str | None = None,
+    ) -> bool:
         """
         快速判定是否存在指定时间点的历史分析记录。
         """
-        history = await self.get_history(group_id, date_str, time_str)
+        history = await self.get_history(group_id, date_str, time_str, group_ref)
         return history is not None
+
+    @staticmethod
+    def _build_storage_key(
+        group_id: str,
+        group_ref: str | None,
+        date_str: str | None = None,
+        time_str: str | None = None,
+    ) -> str:
+        """
+        使用 group_ref 作为主键。
+        """
+        target = str(group_ref or group_id).strip()
+        return f"analysis_{target}_{date_str}_{time_str}"

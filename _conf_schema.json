@@ -174,6 +174,13 @@
                 "default": "",
                 "hint": "专门用于金句分析的 Provider。留空则使用主 LLM Provider"
             },
+            "union_report_provider_id": {
+                "type": "string",
+                "description": "跨群聚合日报专用 Provider ID",
+                "_special": "select_provider",
+                "default": "",
+                "hint": "专门用于跨群聚合日报总结的 Provider。留空则使用主 LLM Provider"
+            },
             "quality_provider_id": {
                 "type": "string",
                 "description": "聊天质量分析专用 Provider ID",
@@ -355,6 +362,49 @@
             }
         }
     },
+    "union_report": {
+        "description": "跨群聚合日报",
+        "type": "object",
+        "hint": "在单群日报全部生成完后，再对指定群的 JSON 日报做一次跨群聚合，产出“五群联合日报”。",
+        "items": {
+            "enabled": {
+                "type": "bool",
+                "description": "启用跨群聚合日报",
+                "default": false,
+                "hint": "开启后，会在每日单群日报完成后延迟执行一次跨群聚合日报。"
+            },
+            "union_groups_list": {
+                "type": "list",
+                "description": "跨群聚合源群列表",
+                "default": [],
+                "hint": "需要参与跨群聚合的群列表。推荐填写完整会话ID（如 onebot:GroupMessage:123456）。直接填群号时，插件会在运行时尝试自动解析平台；若无法唯一解析，该群会被跳过。",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "union_target_groups": {
+                "type": "list",
+                "description": "跨群日报发送目标列表",
+                "default": [],
+                "hint": "跨群日报最终要发到哪些群。留空时会回退到 union_groups_list，即对源群逐个群发。若你有一个“总群”，建议只在这里填那个群。推荐填写完整会话ID。",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "union_report_delay_minutes": {
+                "type": "int",
+                "description": "跨群日报延迟执行分钟数",
+                "default": 5,
+                "hint": "单群日报全部跑完后，再延迟多少分钟执行跨群聚合。默认 5 分钟，用于尽量避开单群任务仍在收尾的时间窗口。"
+            },
+            "union_report_time": {
+                "type": "string",
+                "description": "跨群日报固定发送时间",
+                "default": "",
+                "hint": "可选。填写 HH:MM 后，跨群日报将按固定时间独立触发，例如 12:00。留空时才使用 union_report_delay_minutes 的延迟模式。"
+            }
+        }
+    },
     "html": {
         "description": "HTML 设置",
         "type": "object",
@@ -482,6 +532,20 @@
                         "editor_mode": true,
                         "editor_language": "markdown",
                         "default": "你现在有一份今天全天分散时间段的多个“增量批次点评笔记”。\n你的任务是将这些分散的笔记汇总成一份最终的“全天聊天质量终极锐评”。\n\n## 任务目标：\n1. **全局抽象维度**：根据各批次的维度表现，平衡权重，提取出 3-6 个覆盖全天的【核心、上层抽象】课题维度（如：职场/行业风向、技术架构演进、社畜心理博弈等）。\n2. **严禁在维度名称（name）中出现具体的批次细节。标题必须代表全天的某种趋势。**\n3. **百分比融合**：根据全天笔记的频率和强度，给出一个代表全天整体分布的比例（总和不超过100%）。\n4. **终极点评**：为每个汇总维度写出一句符合你当前人设且升华后的全天总结性点评。可以融合具体批次中的有趣槽点。\n5. **终极总结**：拟定全天的大型主题标题、副标题，并给出一句霸气的全天表现总结。\n\n## 风格要求：\n- 只有维度名称（name）需要高度概括抽象。\n- 点评（comment）和总结（summary）请尽量生动、具体，要把一整天的梗串联起来。\n\n## 返回格式要求：\n必须以纯 JSON 格式返回，不得包含任何 Markdown 格式。\n\n```json\n{{\n  \"title\": \"今日群聊主题\",\n  \"subtitle\": \"副标题\",\n  \"dimensions\": [\n    {{\n      \"name\": \"抽象大类标题\",\n      \"percentage\": 比例,\n      \"comment\": \"全天的锐评总结，请务必保持你的人设口吻\"\n    }}\n  ],\n  \"summary\": \"全天总结金句\"\n}}\n```\n\n增量汇总数据：\n${reviews_text}"
+                    }
+                }
+            },
+            "union_daily_report_prompts": {
+                "description": "跨群聚合日报提示词模板",
+                "type": "object",
+                "hint": "用于跨群聚合日报的提示词模板。请保留 ${groups_summary_text}、${quotes_text}、${topics_text} 写法。",
+                "items": {
+                    "union_daily_report_prompt": {
+                        "description": "默认跨群聚合日报提示词",
+                        "type": "text",
+                        "editor_mode": true,
+                        "editor_language": "markdown",
+                        "default": "你正在为 5 个关系密切的群聊生成一份“跨群聚合日报”。\n\n请基于下面提供的群级统计、候选金句和候选话题，完成两个任务：\n1. 从全部候选金句中，严格挑选“今日五群总榜 Top 3 金句”。\n2. 生成一段约 200 字的“跨群整体活跃度及大事件点评”。\n\n输出要求：\n- 只返回 JSON。\n- `top_quotes` 必须是 3 条以内。\n- 不要编造未出现在输入中的群引用、金句原文或发言人。\n- 点评要有整体感，既要提到冠军群，也要概括跨群共性与差异。\n\n统计概览：\n${groups_summary_text}\n\n候选金句：\n${quotes_text}\n\n候选话题：\n${topics_text}\n\n返回格式：\n```json\n{\n  \"top_quotes\": [\n    {\n      \"content\": \"金句原文\",\n      \"sender\": \"发言人\",\n      \"group_ref\": \"onebot:GroupMessage:123456\",\n      \"reason\": \"入选理由\"\n    }\n  ],\n  \"global_commentary\": \"约 200 字的全局点评\"\n}\n```"
                     }
                 }
             }

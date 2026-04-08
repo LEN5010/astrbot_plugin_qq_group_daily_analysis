@@ -3,6 +3,8 @@
 .kiro/
 .vscode/
 .venv/
+venv
+venv/
 src/analysis/ARCHITECTURE.md
 .serena/.gitignore
 .serena/project.yml

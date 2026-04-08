@@ -5,7 +5,10 @@
 它封装了现有的 history_manager 功能。
 """
 
+import hashlib
 import json
+import re
+from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,7 +45,19 @@ class HistoryRepository:
 
     def _get_group_history_path(self, group_id: str) -> Path:
         """内部方法：获取特定群组的历史 JSON 文件路径。"""
-        return self.history_dir / f"group_{group_id}.json"
+        safe_group_key = self._build_storage_key(group_id)
+        return self.history_dir / f"group_{safe_group_key}.json"
+
+    def _build_storage_key(self, group_id: str) -> str:
+        """将群标识转换为稳定且文件系统安全的存储键。"""
+        normalized = str(group_id).strip()
+        if not normalized:
+            normalized = "unknown"
+
+        digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+        readable = re.sub(r"[^0-9A-Za-z._-]+", "_", normalized).strip("._-")
+        readable = readable[:48] if readable else "group"
+        return f"{readable}_{digest}"
 
     def save_analysis_result(
         self,
@@ -64,16 +79,26 @@ class HistoryRepository:
         try:
             date_str = date_str or datetime.now().strftime("%Y-%m-%d")
             history = self.load_group_history(group_id)
+            serializable_result = self._to_json_compatible(result)
+
+            statistics = serializable_result.get("statistics", {})
+            if isinstance(statistics, dict):
+                serializable_result.setdefault(
+                    "total_messages", int(statistics.get("message_count", 0) or 0)
+                )
+                serializable_result.setdefault(
+                    "participant_count", int(statistics.get("participant_count", 0) or 0)
+                )
 
             # 注入执行时间戳
-            if "timestamp" not in result:
-                result["timestamp"] = datetime.now().isoformat()
+            if "timestamp" not in serializable_result:
+                serializable_result["timestamp"] = datetime.now().isoformat()
 
             # 结构化存储：二级映射 {date -> result}
             if "daily" not in history:
                 history["daily"] = {}
 
-            history["daily"][date_str] = result
+            history["daily"][date_str] = serializable_result
             history["last_updated"] = datetime.now().isoformat()
 
             # 原子写入（覆盖）
@@ -87,6 +112,36 @@ class HistoryRepository:
         except Exception as e:
             logger.error(f"保存群 {group_id} 的历史记录失败: {e}")
             return False
+
+    def _to_json_compatible(self, value: Any) -> Any:
+        """将 dataclass / datetime / tuple 等对象转换为可 JSON 序列化的结构。"""
+        if hasattr(value, "to_dict") and callable(value.to_dict):
+            try:
+                return self._to_json_compatible(value.to_dict())
+            except Exception:
+                pass
+
+        if is_dataclass(value) and not isinstance(value, type):
+            return self._to_json_compatible(asdict(value))
+
+        if isinstance(value, dict):
+            return {
+                str(key): self._to_json_compatible(item) for key, item in value.items()
+            }
+
+        if isinstance(value, list):
+            return [self._to_json_compatible(item) for item in value]
+
+        if isinstance(value, tuple):
+            return [self._to_json_compatible(item) for item in value]
+
+        if isinstance(value, set):
+            return [self._to_json_compatible(item) for item in sorted(value)]
+
+        if isinstance(value, datetime):
+            return value.isoformat()
+
+        return value
 
     def load_group_history(self, group_id: str) -> dict[str, Any]:
         """
@@ -203,8 +258,17 @@ class HistoryRepository:
         try:
             groups = []
             for file_path in self.history_dir.glob("group_*.json"):
-                # 从文件名反推群组 ID (group_123.json -> 123)
-                group_id = file_path.stem.replace("group_", "")
+                group_id = None
+                try:
+                    with open(file_path, encoding="utf-8") as f:
+                        payload = json.load(f)
+                    group_id = str(payload.get("group_id", "")).strip() or None
+                except Exception:
+                    group_id = None
+
+                if not group_id:
+                    # 兼容旧文件名回退
+                    group_id = file_path.stem.replace("group_", "")
                 groups.append(group_id)
             return groups
         except Exception as e:

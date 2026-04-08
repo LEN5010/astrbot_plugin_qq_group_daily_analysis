@@ -13,6 +13,7 @@ import weakref
 from collections import defaultdict
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from typing import Any
 
 from ...domain.entities.incremental_state import IncrementalBatch
@@ -44,6 +45,7 @@ class AnalysisApplicationService:
         config_manager: Any,
         bot_manager: Any,
         history_manager: Any,
+        history_repository: Any,
         report_generator: IReportGenerator,
         llm_analyzer: IAnalysisProvider,
         statistics_service: StatisticsService,
@@ -54,6 +56,7 @@ class AnalysisApplicationService:
         self.config_manager = config_manager
         self.bot_manager = bot_manager
         self.history_manager = history_manager
+        self.history_repository = history_repository
         self.report_generator = report_generator
         self.llm_analyzer = llm_analyzer
         self.statistics_service = statistics_service
@@ -106,6 +109,7 @@ class AnalysisApplicationService:
         platform_id: str | None = None,
         manual: bool = False,
         days: int | None = None,
+        archive_date: str | None = None,
     ) -> dict[str, Any]:
         """
         执行每日分析用例。
@@ -130,6 +134,7 @@ class AnalysisApplicationService:
             adapter = self.bot_manager.get_adapter(platform_id)
             if not adapter:
                 raise ValueError(f"未找到平台 {platform_id} 的适配器")
+            resolved_platform_id = getattr(adapter, "platform_id", platform_id)
 
             # 飞书平台在分析前进行一次性权限与成员头像预热，避免报告阶段出现大面积默认头像。
             if hasattr(adapter, "prepare_group_member_cache"):
@@ -281,8 +286,22 @@ class AnalysisApplicationService:
                 "chat_quality_review": chat_quality_review,
             }
 
+            group_name = await self._resolve_group_name(adapter, group_id)
+
             # 6. 持久化摘要 (Persistence)
-            await self.history_manager.save_analysis(group_id, analysis_result)
+            await self.history_manager.save_analysis(
+                group_id,
+                analysis_result,
+                date_str=archive_date,
+                group_ref=self._build_group_ref(group_id, resolved_platform_id),
+            )
+            await self._persist_analysis_result_json(
+                group_id=group_id,
+                analysis_result=analysis_result,
+                platform_id=resolved_platform_id,
+                group_name=group_name,
+                archive_date=archive_date,
+            )
 
             # 7. 生成报告并发送 (应用层编排发送动作)
             # 这里由调用方处理发送，本服务只返回分析结果和可能的视觉产物
@@ -292,7 +311,7 @@ class AnalysisApplicationService:
                 "messages_count": len(unified_messages),
                 "adapter": adapter,
                 "group_id": group_id,
-                "platform_id": getattr(adapter, "platform_id", platform_id),
+                "platform_id": resolved_platform_id,
             }
 
     # ----------------------------------------------------------------
@@ -562,7 +581,10 @@ class AnalysisApplicationService:
             }
 
     async def execute_incremental_final_report(
-        self, group_id: str, platform_id: str | None = None
+        self,
+        group_id: str,
+        platform_id: str | None = None,
+        archive_date: str | None = None,
     ) -> dict[str, Any]:
         """
         基于滑动窗口内的增量批次生成最终报告。
@@ -723,9 +745,22 @@ class AnalysisApplicationService:
             analysis_result = self.incremental_merge_service.build_analysis_result(
                 state, user_titles
             )
+            group_name = await self._resolve_group_name(adapter, group_id)
 
             # 8. 持久化到 history_manager
-            await self.history_manager.save_analysis(group_id, analysis_result)
+            await self.history_manager.save_analysis(
+                group_id,
+                analysis_result,
+                date_str=archive_date,
+                group_ref=self._build_group_ref(group_id, resolved_platform_id),
+            )
+            await self._persist_analysis_result_json(
+                group_id=group_id,
+                analysis_result=analysis_result,
+                platform_id=resolved_platform_id,
+                group_name=group_name,
+                archive_date=archive_date,
+            )
 
             logger.info(
                 f"群 {group_id} 增量最终报告完成: "
@@ -741,7 +776,7 @@ class AnalysisApplicationService:
                 "messages_count": state.total_message_count,
                 "adapter": adapter,
                 "group_id": group_id,
-                "platform_id": getattr(adapter, "platform_id", platform_id),
+                "platform_id": resolved_platform_id,
             }
 
     # ----------------------------------------------------------------
@@ -814,3 +849,60 @@ class AnalysisApplicationService:
             }
 
         return result
+
+    async def _persist_analysis_result_json(
+        self,
+        group_id: str,
+        analysis_result: dict[str, Any],
+        platform_id: str | None,
+        group_name: str | None,
+        archive_date: str | None,
+    ) -> None:
+        """
+        额外落盘完整分析结果到 HistoryRepository，供跨群聚合直接读取。
+        """
+        if not self.history_repository:
+            return
+
+        payload = deepcopy(analysis_result)
+        payload["group_id"] = group_id
+        payload["platform_id"] = platform_id or ""
+        payload["group_ref"] = self._build_group_ref(group_id, platform_id)
+        payload["group_name"] = group_name or group_id
+
+        statistics = payload.get("statistics")
+        if statistics is not None:
+            payload["total_messages"] = getattr(
+                statistics, "message_count", payload.get("total_messages", 0)
+            )
+            payload["participant_count"] = getattr(
+                statistics, "participant_count", payload.get("participant_count", 0)
+            )
+
+        target_date = archive_date or dt.datetime.now().strftime("%Y-%m-%d")
+        saved = await asyncio.to_thread(
+            self.history_repository.save_analysis_result,
+            payload["group_ref"],
+            payload,
+            target_date,
+        )
+        if not saved:
+            logger.warning(f"群 {group_id} 的 JSON 历史分析结果保存失败")
+
+    @staticmethod
+    def _build_group_ref(group_id: str, platform_id: str | None) -> str:
+        """构建跨群聚合使用的稳定群引用。"""
+        if platform_id:
+            return f"{platform_id}:GroupMessage:{group_id}"
+        return group_id
+
+    async def _resolve_group_name(self, adapter: Any, group_id: str) -> str | None:
+        """尽量在分析完成时固化群名，避免后续 union prompt 退化成群号。"""
+        try:
+            if adapter and hasattr(adapter, "get_group_info"):
+                info = await adapter.get_group_info(group_id)
+                if info and getattr(info, "group_name", None):
+                    return str(info.group_name)
+        except Exception as e:
+            logger.debug(f"解析群名失败，回退为群号 {group_id}: {e}")
+        return None
