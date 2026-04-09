@@ -480,11 +480,11 @@ class ConfigManager:
 
     def get_max_concurrent_tasks(self) -> int:
         """获取自动分析最大并发群数"""
-        return self._get_group("performance").get("max_concurrent_groups", 3)
+        return self._get_group("performance").get("max_concurrent_groups", 1)
 
     def get_llm_max_concurrent(self) -> int:
         """获取全局 LLM 最大并发请求数"""
-        return self._get_group("performance").get("max_concurrent_llm", 3)
+        return self._get_group("performance").get("max_concurrent_llm", 1)
 
     def get_t2i_max_concurrent(self) -> int:
         """获取全局图片渲染（T2I）最大并发数"""

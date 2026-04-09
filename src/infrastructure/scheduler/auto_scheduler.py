@@ -191,20 +191,24 @@ class AutoScheduler:
 
         scheduler = context.cron_manager.scheduler
 
+        should_register_incremental = self.config_manager.get_incremental_enabled() and (
+            auto_enabled or self.config_manager.get_union_report_enabled()
+        )
+
         if auto_enabled:
             # 1. 注册核心报告生成任务（涵盖全量分析与增量总结报告）
             # 每个配置的时间点都会触发一次解析
             logger.info("注册定时分析报告任务...")
             self._schedule_report_time_jobs(scheduler)
 
-            # 2. 只有在增量功能总开关开启时，才注册全天候的增量提取任务
-            if self.config_manager.get_incremental_enabled():
-                logger.info("增量分析功能已开启，正在注册全天增量提取任务...")
-                self._schedule_incremental_cron_jobs(scheduler)
-            else:
+            if not should_register_incremental:
                 logger.info("增量分析总开关未启用，仅执行传统定时全量分析。")
         else:
             logger.info("自动分析未启用，跳过单群定时任务注册。")
+
+        if should_register_incremental:
+            logger.info("增量分析功能已开启，正在注册全天增量提取任务...")
+            self._schedule_incremental_cron_jobs(scheduler)
 
         if union_fixed_time:
             logger.info("注册跨群聚合日报固定时间任务...")
@@ -624,8 +628,7 @@ class AutoScheduler:
         try:
             logger.info("开始执行自动增量分析（并发模式）")
 
-            # 仅选取模式为 incremental 的目标群
-            incr_targets = await self._get_scheduled_targets(mode_filter="incremental")
+            incr_targets = await self._get_incremental_runtime_targets()
 
             if not incr_targets:
                 logger.info("没有配置为增量模式的群聊需要增量分析")
@@ -1079,14 +1082,37 @@ class AutoScheduler:
         success_count = 0
         skip_count = 0
         error_count = 0
+        group_results: dict[str, dict[str, Any]] = {}
 
-        for result in results:
+        for index, result in enumerate(results):
+            _gid, _pid, _mode, group_ref = target_list[index]
             if isinstance(result, Exception):
                 error_count += 1
+                group_results[group_ref] = {
+                    "success": False,
+                    "reason": str(result),
+                    "status": "error",
+                }
             elif isinstance(result, dict) and not result.get("success", True):
                 skip_count += 1
+                group_results[group_ref] = {
+                    "success": False,
+                    "reason": result.get("reason", "unknown"),
+                    "status": "skipped",
+                }
             else:
                 success_count += 1
+                group_results[group_ref] = {
+                    "success": True,
+                    "status": "success",
+                }
+
+        terminal_failed_group_refs = sorted(
+            [group_ref for group_ref, item in group_results.items() if not item["success"]]
+        )
+        ready_group_refs = sorted(
+            [group_ref for group_ref, item in group_results.items() if item["success"]]
+        )
 
         result_summary: dict[str, Any] = {
             "success": success_count > 0,
@@ -1094,6 +1120,9 @@ class AutoScheduler:
             "success_count": success_count,
             "skip_count": skip_count,
             "error_count": error_count,
+            "group_results": group_results,
+            "ready_group_refs": ready_group_refs,
+            "terminal_failed_group_refs": terminal_failed_group_refs,
         }
         if success_count == 0:
             result_summary["reason"] = "prepare_failed"
@@ -1165,12 +1194,28 @@ class AutoScheduler:
                 }
 
             if require_all_groups_ready:
+                wait_source_group_refs = source_group_refs
+                if prepare_result:
+                    terminal_failed_group_refs = {
+                        str(group_ref).strip()
+                        for group_ref in prepare_result.get(
+                            "terminal_failed_group_refs", []
+                        )
+                        if str(group_ref).strip()
+                    }
+                    if terminal_failed_group_refs:
+                        wait_source_group_refs = [
+                            group_ref
+                            for group_ref in source_group_refs
+                            if group_ref not in terminal_failed_group_refs
+                        ]
+
                 wait_timeout_minutes = max(
                     0,
                     self.config_manager.get_union_wait_timeout_minutes(),
                 )
                 missing_group_refs = await self._wait_for_union_source_reports_ready(
-                    source_group_refs,
+                    wait_source_group_refs,
                     report_date,
                     wait_timeout_minutes,
                 )
@@ -1410,6 +1455,44 @@ class AutoScheduler:
             )
             targets.append((group_id, platform_id, mode, group_ref))
 
+        return targets
+
+    async def _get_incremental_runtime_targets(
+        self,
+    ) -> list[tuple[str, str, str]]:
+        """
+        获取需要执行后台增量提取的群列表。
+
+        来源：
+        1. 常规定时分析链路中的 incremental 群
+        2. 联合日报源群中的 incremental 群（支持静默增量，不要求单群日报显式发送）
+        """
+        targets: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        scheduled_incremental = await self._get_scheduled_targets(mode_filter="incremental")
+        for group_id, platform_id, mode in scheduled_incremental:
+            key = (platform_id, group_id)
+            if key in seen:
+                continue
+            targets.append((group_id, platform_id, mode))
+            seen.add(key)
+
+        union_source_targets = await self._get_union_source_targets()
+        for group_id, platform_id, mode, group_ref in union_source_targets:
+            if mode != "incremental":
+                continue
+            if not platform_id:
+                continue
+            if not self.config_manager.is_group_allowed(group_ref):
+                continue
+            key = (platform_id, group_id)
+            if key in seen:
+                continue
+            targets.append((group_id, platform_id, mode))
+            seen.add(key)
+
+        logger.info("后台增量提取目标解析完成：共 %d 个群", len(targets))
         return targets
 
     async def _wait_for_union_source_reports_ready(
