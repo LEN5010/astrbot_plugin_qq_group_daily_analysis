@@ -64,6 +64,18 @@ class UnionQuote:
 
 
 @dataclass
+class UnionWaterKing:
+    """全局最活跃用户。"""
+
+    user_id: str
+    nickname: str
+    message_count: int
+    group_ref: str
+    group_name: str
+    platform_id: str
+
+
+@dataclass
 class UnionDailyReport:
     """跨群聚合日报结果。"""
 
@@ -72,6 +84,7 @@ class UnionDailyReport:
     group_snapshots: list[UnionGroupSnapshot]
     top_quotes: list[UnionQuote]
     topic_highlights: list[UnionTopic]
+    water_king: UnionWaterKing | None
     overview: str
     total_messages: int
     total_participants: int
@@ -83,17 +96,17 @@ class UnionDailyReportService:
     """跨群聚合日报服务。"""
 
     _DEFAULT_PROMPT = """
-你正在为 5 个关系密切的群聊生成一份“跨群聚合日报”。
+你正在为“A海岸”生成一份联合日报。
 
 请基于下面提供的群级统计、候选金句和候选话题，完成两个任务：
-1. 从全部候选金句中，严格挑选“今日五群总榜 Top 3 金句”。
-2. 生成一段约 200 字的“跨群整体活跃度及大事件点评”。
+1. 从全部候选金句中，严格挑选“今日 A海岸 Top 3 金句”。
+2. 生成一段约 200 字的“今日 A海岸整体活跃度及大事件点评”。
 
 输出要求：
 - 只返回 JSON。
 - `top_quotes` 必须是 3 条以内。
 - 不要编造未出现在输入中的群号、金句原文或发言人。
-- 点评要有整体感，既要提到冠军群，也要概括跨群共性与差异。
+- 点评要有整体感，既要提到最活跃群，也要概括 A海岸整体共性与差异。
 
 统计概览：
 ${groups_summary_text}
@@ -126,6 +139,7 @@ ${topics_text}
         group_snapshots: list[UnionGroupSnapshot] = []
         all_quotes: list[UnionQuote] = []
         all_topics: list[UnionTopic] = []
+        water_king: UnionWaterKing | None = None
         missing_groups: list[str] = []
 
         for group_ref in normalized_group_refs:
@@ -138,6 +152,15 @@ ${topics_text}
 
             snapshot = self._build_group_snapshot(group_ref, analysis_result)
             group_snapshots.append(snapshot)
+            water_king = self._pick_water_king(
+                current=water_king,
+                candidate=self._extract_water_king(
+                    snapshot.group_ref,
+                    snapshot.platform_id,
+                    snapshot.group_name,
+                    analysis_result,
+                ),
+            )
             all_quotes.extend(
                 self._extract_quotes(
                     snapshot.group_ref,
@@ -187,6 +210,7 @@ ${topics_text}
             group_snapshots=group_snapshots,
             top_quotes=top_quotes,
             topic_highlights=all_topics[:6],
+            water_king=water_king,
             overview=overview,
             total_messages=total_messages,
             total_participants=total_participants,
@@ -311,6 +335,63 @@ ${topics_text}
 
         return quotes
 
+    def _extract_water_king(
+        self,
+        group_ref: str,
+        platform_id: str,
+        group_name: str,
+        analysis_result: dict[str, Any],
+    ) -> UnionWaterKing | None:
+        raw_user_analysis = analysis_result.get("user_analysis", {}) or {}
+        if not isinstance(raw_user_analysis, dict):
+            return None
+
+        best_user: UnionWaterKing | None = None
+        for user_id, raw_stats in raw_user_analysis.items():
+            if not isinstance(raw_stats, dict):
+                continue
+
+            message_count = int(raw_stats.get("message_count") or 0)
+            if message_count <= 0:
+                continue
+
+            nickname = str(raw_stats.get("nickname") or user_id).strip() or str(user_id)
+            candidate = UnionWaterKing(
+                user_id=str(user_id).strip(),
+                nickname=nickname,
+                message_count=message_count,
+                group_ref=group_ref,
+                group_name=group_name,
+                platform_id=platform_id,
+            )
+            best_user = self._pick_water_king(best_user, candidate)
+
+        return best_user
+
+    def _pick_water_king(
+        self,
+        current: UnionWaterKing | None,
+        candidate: UnionWaterKing | None,
+    ) -> UnionWaterKing | None:
+        if candidate is None:
+            return current
+        if current is None:
+            return candidate
+
+        current_key = (
+            current.message_count,
+            current.group_name,
+            current.nickname,
+            current.user_id,
+        )
+        candidate_key = (
+            candidate.message_count,
+            candidate.group_name,
+            candidate.nickname,
+            candidate.user_id,
+        )
+        return candidate if candidate_key > current_key else current
+
     def _extract_topics(
         self,
         group_ref: str,
@@ -419,21 +500,21 @@ ${topics_text}
     ) -> str:
         groups_summary_lines = [
             (
-                f"- 群 {item.group_name} ({item.group_ref})："
+                f"- {item.group_name}："
                 f"消息 {item.total_messages}，参与人数 {item.participant_count}，"
-                f"话题 {item.topics_count}，金句 {item.golden_quotes_count}"
+                f"话题 {item.topics_count}"
             )
             for item in group_snapshots
         ]
         groups_summary_lines.append(
-            f"- 今日冠军群：{champion_group.group_name} ({champion_group.group_ref})，"
+            f"- 今日 A海岸最活跃群：{champion_group.group_name}，"
             f"消息 {champion_group.total_messages}"
         )
 
         quotes_text = "\n".join(
             [
                 (
-                    f"{index}. [{quote.group_name}/{quote.group_ref}] "
+                    f"{index}. [{quote.group_name}] "
                     f"{quote.sender}: {quote.content} | 理由: {quote.reason}"
                 )
                 for index, quote in enumerate(all_quotes[:20], 1)
@@ -442,7 +523,7 @@ ${topics_text}
         topics_text = "\n".join(
             [
                 (
-                    f"{index}. [{topic.group_name}/{topic.group_ref}] "
+                    f"{index}. [{topic.group_name}] "
                     f"{topic.topic} | 参与者: {'、'.join(topic.contributors[:4]) or '群友'}"
                     f" | 详情: {topic.detail}"
                 )
@@ -542,10 +623,9 @@ ${topics_text}
         total_messages = sum(item.total_messages for item in group_snapshots)
         total_participants = sum(item.participant_count for item in group_snapshots)
         overview = (
-            f"今日共覆盖 {len(group_snapshots)} 个群，累计消息 {total_messages} 条，"
-            f"总参与人数 {total_participants}。活跃冠军群是"
-            f"{champion_group.group_name}，贡献了 {champion_group.total_messages} 条消息。"
-            "整体讨论既有延续性，也有明显的跨群热点扩散，适合作为后续重点维护与二次互动的素材池。"
+            f"今日 A海岸累计消息 {total_messages} 条，总参与人数 {total_participants}。"
+            f"最活跃的是 {champion_group.group_name}，贡献了 {champion_group.total_messages} 条消息。"
+            "整体讨论既有延续性，也有明显的热点扩散，适合作为后续重点维护与二次互动的素材池。"
         )
         return top_quotes, overview, token_usage or {
             "prompt_tokens": 0,

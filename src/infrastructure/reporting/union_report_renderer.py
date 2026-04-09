@@ -30,26 +30,37 @@ class UnionReportRenderer:
     def render_text(self, report: Any) -> str:
         champion = report.champion_group
         lines = [
-            "📊 五群联合日报",
+            "📊 A海岸联合日报",
             f"📅 {report.report_date}",
             "",
-            (
-                f"🏆 今日冠军群：{champion.group_name} ({champion.group_id})"
-                f"{' @ ' + champion.platform_id if champion.platform_id else ''}"
-                f" · {champion.total_messages} 条消息"
-            ),
-            f"📈 累计消息：{report.total_messages}",
-            f"👥 累计参与人数：{report.total_participants}",
-            "",
-            "💬 跨群 Top 3 金句",
+            f"🏆 今日 A海岸最活跃群：{champion.group_name} · {champion.total_messages} 条消息",
+            f"📈 今日 A海岸累计消息：{report.total_messages}",
+            f"👥 今日 A海岸累计参与人数：{report.total_participants}",
         ]
+
+        if report.water_king:
+            lines.extend(
+                [
+                    (
+                        f"💦 全A海岸最能水：{report.water_king.nickname}"
+                        f"（ID: {report.water_king.user_id}）"
+                        f" · {report.water_king.message_count} 条"
+                        f" · 来自 {report.water_king.group_name}"
+                    ),
+                ]
+            )
+
+        lines.extend(
+            [
+            "",
+            "💬 今日 A海岸 Top 3 金句",
+        ])
 
         for index, quote in enumerate(report.top_quotes, 1):
             lines.append(
-                f"{index}. [{quote.group_name}"
-                f"{' @ ' + quote.platform_id if quote.platform_id else ''}] "
+                f"{index}. [{quote.group_name}] "
                 f"{quote.sender}: {quote.content}"
             )
 
-        lines.extend(["", "📝 全局点评", report.overview])
+        lines.extend(["", "📝 今日 A海岸点评", report.overview])
         return "\n".join(lines)

@@ -557,7 +557,7 @@
                         "type": "text",
                         "editor_mode": true,
                         "editor_language": "markdown",
-                        "default": "你正在为 5 个关系密切的群聊生成一份“跨群聚合日报”。\n\n请基于下面提供的群级统计、候选金句和候选话题，完成两个任务：\n1. 从全部候选金句中，严格挑选“今日五群总榜 Top 3 金句”。\n2. 生成一段约 200 字的“跨群整体活跃度及大事件点评”。\n\n输出要求：\n- 只返回 JSON。\n- `top_quotes` 必须是 3 条以内。\n- 不要编造未出现在输入中的群引用、金句原文或发言人。\n- 点评要有整体感，既要提到冠军群，也要概括跨群共性与差异。\n\n统计概览：\n${groups_summary_text}\n\n候选金句：\n${quotes_text}\n\n候选话题：\n${topics_text}\n\n返回格式：\n```json\n{\n  \"top_quotes\": [\n    {\n      \"content\": \"金句原文\",\n      \"sender\": \"发言人\",\n      \"group_ref\": \"onebot:GroupMessage:123456\",\n      \"reason\": \"入选理由\"\n    }\n  ],\n  \"global_commentary\": \"约 200 字的全局点评\"\n}\n```"
+                        "default": "你正在为“A海岸”生成一份联合日报。\n\n请基于下面提供的群级统计、候选金句和候选话题，完成两个任务：\n1. 从全部候选金句中，严格挑选“今日 A海岸 Top 3 金句”。\n2. 生成一段约 200 字的“今日 A海岸整体活跃度及大事件点评”。\n\n输出要求：\n- 只返回 JSON。\n- `top_quotes` 必须是 3 条以内。\n- 不要编造未出现在输入中的群引用、金句原文或发言人。\n- 点评要有整体感，既要提到最活跃群，也要概括 A海岸整体共性与差异。\n\n统计概览：\n${groups_summary_text}\n\n候选金句：\n${quotes_text}\n\n候选话题：\n${topics_text}\n\n返回格式：\n```json\n{\n  \"top_quotes\": [\n    {\n      \"content\": \"金句原文\",\n      \"sender\": \"发言人\",\n      \"group_ref\": \"onebot:GroupMessage:123456\",\n      \"reason\": \"入选理由\"\n    }\n  ],\n  \"global_commentary\": \"约 200 字的全局点评\"\n}\n```"
                     }
                 }
             }

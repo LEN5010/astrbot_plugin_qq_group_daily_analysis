@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>五群联合日报</title>
+    <title>A海岸联合日报</title>
     <style>
         :root {
             --bg: #f4efe6;
@@ -259,13 +259,12 @@
 <body>
     <div class="page">
         <section class="hero">
-            <div class="eyebrow">Union Daily Report</div>
-            <h1>五群联合日报</h1>
+            <div class="eyebrow">A Coast Daily Report</div>
+            <h1>A海岸联合日报</h1>
             <div class="hero-meta">
                 <div class="hero-pill">日期 {{ report.report_date }}</div>
-                <div class="hero-pill">覆盖 {{ report.group_snapshots|length }} 个群</div>
-                <div class="hero-pill">累计 {{ report.total_messages }} 条消息</div>
-                <div class="hero-pill">累计 {{ report.total_participants }} 人参与</div>
+                <div class="hero-pill">今日 A海岸 {{ report.total_messages }} 条消息</div>
+                <div class="hero-pill">今日 A海岸 {{ report.total_participants }} 人参与</div>
             </div>
         </section>
 
@@ -273,37 +272,45 @@
             <section class="section">
                 <div class="summary-grid">
                     <article class="card champion-card">
-                        <div class="champion-label">今日最活跃冠军群</div>
+                        <div class="champion-label">今日 A海岸最活跃群</div>
                         <div class="champion-name">{{ report.champion_group.group_name }}</div>
-                        <div class="group-id">
-                            {{ report.champion_group.group_id }}
-                            {% if report.champion_group.platform_id %}
-                            · {{ report.champion_group.platform_id }}
-                            {% endif %}
-                        </div>
                         <div class="champion-value">{{ report.champion_group.total_messages }}</div>
                         <div class="stat-label">messages today</div>
                     </article>
                     <article class="card">
-                        <div class="stat-label">累计消息数</div>
+                        <div class="stat-label">今日 A海岸累计消息</div>
                         <div class="stat-value">{{ report.total_messages }}</div>
                     </article>
                     <article class="card">
-                        <div class="stat-label">累计参与人数</div>
+                        <div class="stat-label">今日 A海岸累计参与人数</div>
                         <div class="stat-value">{{ report.total_participants }}</div>
                     </article>
                 </div>
             </section>
 
+            {% if report.water_king %}
             <section class="section">
                 <article class="card overview-card">
-                    <h2 class="section-title">全局点评</h2>
+                    <h2 class="section-title">全A海岸最能水用户</h2>
+                    <p class="overview-text">
+                        <strong>{{ report.water_king.nickname }}</strong>
+                        <span style="font-weight: 700;">（ID: {{ report.water_king.user_id }}）</span>
+                        今日共发言 {{ report.water_king.message_count }} 条，来自
+                        <strong>{{ report.water_king.group_name }}</strong>。
+                    </p>
+                </article>
+            </section>
+            {% endif %}
+
+            <section class="section">
+                <article class="card overview-card">
+                    <h2 class="section-title">今日 A海岸点评</h2>
                     <p class="overview-text">{{ report.overview }}</p>
                 </article>
             </section>
 
             <section class="section">
-                <h2 class="section-title">跨群 Top 3 金句</h2>
+                <h2 class="section-title">今日 A海岸 Top 3 金句</h2>
                 <div class="list-grid">
                     {% for quote in report.top_quotes %}
                     <article class="card quote-card">
@@ -311,12 +318,7 @@
                         <div class="quote-content">“{{ quote.content }}”</div>
                         <div class="quote-meta">
                             <div><strong>{{ quote.sender }}</strong></div>
-                            <div>
-                                {{ quote.group_name }} · {{ quote.group_id }}
-                                {% if quote.platform_id %}
-                                · {{ quote.platform_id }}
-                                {% endif %}
-                            </div>
+                            <div>{{ quote.group_name }}</div>
                             <div>{{ quote.reason }}</div>
                         </div>
                     </article>
@@ -325,18 +327,12 @@
             </section>
 
             <section class="section">
-                <h2 class="section-title">群活跃度横向对比</h2>
+                <h2 class="section-title">A海岸活跃度横向对比</h2>
                 <div class="group-table">
                     {% for group in report.group_snapshots %}
-                    <div class="group-row{% if group.group_id == report.champion_group.group_id %} highlight{% endif %}">
+                    <div class="group-row{% if group.group_ref == report.champion_group.group_ref %} highlight{% endif %}">
                         <div>
                             <div class="group-name">{{ group.group_name }}</div>
-                            <div class="group-id">
-                                {{ group.group_id }}
-                                {% if group.platform_id %}
-                                · {{ group.platform_id }}
-                                {% endif %}
-                            </div>
                         </div>
                         <div>
                             <div class="stat-label">消息</div>
@@ -347,8 +343,8 @@
                             <div>{{ group.participant_count }}</div>
                         </div>
                         <div>
-                            <div class="stat-label">话题 / 金句</div>
-                            <div>{{ group.topics_count }} / {{ group.golden_quotes_count }}</div>
+                            <div class="stat-label">话题数</div>
+                            <div>{{ group.topics_count }}</div>
                         </div>
                     </div>
                     {% endfor %}
@@ -357,18 +353,18 @@
 
             {% if report.topic_highlights %}
             <section class="section">
-                <h2 class="section-title">跨群热议片段</h2>
+                <h2 class="section-title">A海岸热议片段</h2>
                 <div class="topic-grid">
                     {% for topic in report.topic_highlights %}
                     <article class="card topic-card">
                         <h3 class="topic-title">{{ topic.topic }}</h3>
                         <div class="topic-meta">
-                            {{ topic.group_name }} · {{ topic.group_id }}
-                            {% if topic.platform_id %}
-                            · {{ topic.platform_id }}
-                            {% endif %}
+                            {{ topic.group_name }}
                             {% if topic.contributors %}
-                            · {{ topic.contributors|join('、') }}
+                            ·
+                            {% for contributor in topic.contributors %}
+                            <strong>{{ contributor }}</strong>{% if not loop.last %}、{% endif %}
+                            {% endfor %}
                             {% endif %}
                         </div>
                         <p class="topic-detail">{{ topic.detail }}</p>
@@ -379,12 +375,12 @@
             {% endif %}
 
             <div class="footer">
-                <div>Generated by astrbot_plugin_qq_group_daily_analysis</div>
+                <div>Generated for A海岸</div>
                 <div>
                     {% if report.missing_groups %}
-                    缺失群：{{ report.missing_groups|join('、') }}
+                    存在未纳入本次聚合的来源群
                     {% else %}
-                    所有目标群均已纳入聚合
+                    今日来源群均已纳入聚合
                     {% endif %}
                 </div>
             </div>
