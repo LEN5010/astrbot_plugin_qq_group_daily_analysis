@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 from ...infrastructure.analysis.utils.json_utils import parse_json_object_response
@@ -401,21 +402,25 @@ ${topics_text}
         group_name: str,
         analysis_result: dict[str, Any],
     ) -> list[UnionTopic]:
+        user_display_map = self._build_user_display_map(analysis_result, group_name)
         topics: list[UnionTopic] = []
         for item in analysis_result.get("topics", []) or []:
             if not isinstance(item, dict):
                 continue
 
             topic = str(item.get("topic", "")).strip()
-            detail = str(item.get("detail", "")).strip()
+            detail = self._sanitize_topic_detail(
+                str(item.get("detail", "")).strip(),
+                user_display_map,
+            )
             if not topic or not detail:
                 continue
 
             contributors_raw = item.get("contributors", [])
-            contributors = (
-                [str(value).strip() for value in contributors_raw if str(value).strip()]
-                if isinstance(contributors_raw, list)
-                else []
+            contributors = self._sanitize_topic_contributors(
+                contributors_raw if isinstance(contributors_raw, list) else [],
+                user_display_map,
+                group_name,
             )
 
             topics.append(
@@ -431,6 +436,72 @@ ${topics_text}
             )
 
         return topics
+
+    def _build_user_display_map(
+        self,
+        analysis_result: dict[str, Any],
+        group_name: str,
+    ) -> dict[str, str]:
+        raw_user_analysis = analysis_result.get("user_analysis", {}) or {}
+        if not isinstance(raw_user_analysis, dict):
+            return {}
+
+        user_display_map: dict[str, str] = {}
+        for raw_user_id, raw_stats in raw_user_analysis.items():
+            user_id = str(raw_user_id).strip()
+            if not user_id or not user_id.isdigit():
+                continue
+
+            nickname = user_id
+            if isinstance(raw_stats, dict):
+                nickname = str(raw_stats.get("nickname") or user_id).strip() or user_id
+
+            if nickname == user_id:
+                nickname = "群友"
+
+            user_display_map[user_id] = f"【{nickname}】（来自{group_name}）"
+
+        return user_display_map
+
+    def _sanitize_topic_contributors(
+        self,
+        contributors: list[str],
+        user_display_map: dict[str, str],
+        group_name: str,
+    ) -> list[str]:
+        sanitized: list[str] = []
+        seen: set[str] = set()
+
+        for raw_value in contributors:
+            text = str(raw_value).strip()
+            if not text:
+                continue
+
+            if text.isdigit():
+                text = user_display_map.get(text, f"【群友】（来自{group_name}）")
+
+            if text in seen:
+                continue
+            sanitized.append(text)
+            seen.add(text)
+
+        return sanitized
+
+    def _sanitize_topic_detail(
+        self,
+        detail: str,
+        user_display_map: dict[str, str],
+    ) -> str:
+        sanitized = detail
+        for user_id in sorted(user_display_map.keys(), key=len, reverse=True):
+            replacement = user_display_map[user_id]
+            sanitized = re.sub(rf"\[{re.escape(user_id)}\]", replacement, sanitized)
+            sanitized = re.sub(
+                rf"(?<!\d){re.escape(user_id)}(?!\d)",
+                replacement,
+                sanitized,
+            )
+        return sanitized
 
     async def _generate_llm_summary(
         self,
