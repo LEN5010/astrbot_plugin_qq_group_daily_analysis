@@ -459,7 +459,7 @@ ${topics_text}
             if nickname == user_id:
                 nickname = "群友"
 
-            user_display_map[user_id] = f"【{nickname}】（来自{group_name}）"
+            user_display_map[user_id] = f"【{nickname}】"
 
         return user_display_map
 
@@ -478,7 +478,7 @@ ${topics_text}
                 continue
 
             if text.isdigit():
-                text = user_display_map.get(text, f"【群友】（来自{group_name}）")
+                text = user_display_map.get(text, "【群友】")
 
             if text in seen:
                 continue

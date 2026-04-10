@@ -359,15 +359,13 @@
                     <article class="card topic-card">
                         <h3 class="topic-title">{{ topic.topic }}</h3>
                         <div class="topic-meta">
-                            {{ topic.group_name }}
                             {% if topic.contributors %}
-                            ·
                             {% for contributor in topic.contributors %}
                             <strong>{{ contributor }}</strong>{% if not loop.last %}、{% endif %}
                             {% endfor %}
                             {% endif %}
                         </div>
-                        <p class="topic-detail">{{ topic.detail }}</p>
+                        <p class="topic-detail">{{ topic.detail | render_union_markdown }}</p>
                     </article>
                     {% endfor %}
                 </div>

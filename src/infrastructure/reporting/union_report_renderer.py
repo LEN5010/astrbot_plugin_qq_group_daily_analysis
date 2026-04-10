@@ -4,10 +4,13 @@
 
 from __future__ import annotations
 
+import html
+import re
 from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from markupsafe import Markup
 
 
 class UnionReportRenderer:
@@ -22,6 +25,7 @@ class UnionReportRenderer:
             trim_blocks=True,
             lstrip_blocks=True,
         )
+        self._env.filters["render_union_markdown"] = self._render_union_markdown
 
     def render_html(self, report: Any) -> str:
         template = self._env.get_template("union_template.html")
@@ -64,3 +68,13 @@ class UnionReportRenderer:
 
         lines.extend(["", "📝 今日 A海岸点评", report.overview])
         return "\n".join(lines)
+
+    @staticmethod
+    def _render_union_markdown(text: Any) -> Markup:
+        raw = str(text or "")
+        escaped = html.escape(raw, quote=False)
+        escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+        escaped = re.sub(r"__(.+?)__", r"<strong>\1</strong>", escaped)
+        escaped = re.sub(r"`(.+?)`", r"<code>\1</code>", escaped)
+        escaped = escaped.replace("\n", "<br>")
+        return Markup(escaped)
