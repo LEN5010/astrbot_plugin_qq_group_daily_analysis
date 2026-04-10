@@ -646,12 +646,15 @@ class AnalysisApplicationService:
             adapter = self.bot_manager.get_adapter(platform_id)
             if not adapter:
                 raise ValueError(f"未找到平台 {platform_id} 的适配器")
+            resolved_platform_id = getattr(adapter, "platform_id", platform_id)
 
             # 6. 执行分析相关的变量准备
             user_titles = []
             user_title_enabled = self.config_manager.get_user_title_analysis_enabled()
             unified_msg_origin = (
-                f"{platform_id}:GroupMessage:{group_id}" if platform_id else group_id
+                f"{resolved_platform_id}:GroupMessage:{group_id}"
+                if resolved_platform_id
+                else group_id
             )
 
             if user_title_enabled and state.user_activities:
