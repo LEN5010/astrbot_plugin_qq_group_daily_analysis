@@ -231,6 +231,57 @@
                 "default": true,
                 "hint": "是否使用LLM进行聊天质量锐评（维度化分析）"
             },
+            "content_moderation_enabled": {
+                "type": "bool",
+                "description": "启用展示级内容治理",
+                "default": true,
+                "hint": "开启后，会在话题与金句生成后做一次本地规则治理。敏感词命中的话题将直接不展示，性/低俗内容会被降权。"
+            },
+            "sensitive_topic_blocklist": {
+                "type": "list",
+                "description": "敏感话题屏蔽词列表",
+                "default": [],
+                "hint": "命中这些词的话题将直接不展示，并自动顺延后续话题补位。适合维护少量明确不希望出现在日报里的敏感词。"
+            },
+            "sexual_vulgar_words": {
+                "type": "list",
+                "description": "性/低俗内容降权词列表",
+                "default": [
+                    "做爱",
+                    "性爱",
+                    "性欲",
+                    "约炮",
+                    "口交",
+                    "乳交",
+                    "射精",
+                    "发情",
+                    "黄图",
+                    "黄文",
+                    "色情",
+                    "淫",
+                    "鸡巴",
+                    "jb",
+                    "牛子",
+                    "骚逼",
+                    "打飞机",
+                    "撸",
+                    "呻吟",
+                    "裸聊"
+                ],
+                "hint": "命中这些词的话题和金句不会被直接删除，但会被降低排序权重，减少在日报中的出现概率。"
+            },
+            "topic_sexual_penalty_weight": {
+                "type": "int",
+                "description": "话题低俗降权权重",
+                "default": 2,
+                "hint": "权重越高，命中性/低俗词的话题越容易被排到后面。"
+            },
+            "quote_sexual_penalty_weight": {
+                "type": "int",
+                "description": "金句低俗降权权重",
+                "default": 1,
+                "hint": "权重越高，命中性/低俗词的金句越容易被排到后面。"
+            },
             "max_topics": {
                 "type": "int",
                 "description": "最大话题数量",

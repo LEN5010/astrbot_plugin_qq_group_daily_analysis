@@ -174,6 +174,40 @@ class ConfigManager:
             "chat_quality_analysis_enabled", False
         )
 
+    def get_content_moderation_enabled(self) -> bool:
+        """获取是否启用展示级内容治理"""
+        return self._get_group("analysis_features").get(
+            "content_moderation_enabled", True
+        )
+
+    def get_sensitive_topic_blocklist(self) -> list[str]:
+        """获取敏感话题屏蔽词列表"""
+        return self._get_group("analysis_features").get(
+            "sensitive_topic_blocklist", []
+        )
+
+    def get_sexual_vulgar_words(self) -> list[str]:
+        """获取性/低俗内容降权词列表"""
+        return self._get_group("analysis_features").get(
+            "sexual_vulgar_words", []
+        )
+
+    def get_topic_sexual_penalty_weight(self) -> int:
+        """获取话题的性/低俗降权权重"""
+        return int(
+            self._get_group("analysis_features").get(
+                "topic_sexual_penalty_weight", 2
+            )
+        )
+
+    def get_quote_sexual_penalty_weight(self) -> int:
+        """获取金句的性/低俗降权权重"""
+        return int(
+            self._get_group("analysis_features").get(
+                "quote_sexual_penalty_weight", 1
+            )
+        )
+
     def get_max_topics(self) -> int:
         """获取最大话题数量"""
         return self._get_group("analysis_features").get("max_topics", 5)

@@ -27,6 +27,7 @@ from ...domain.services.analysis_domain_service import (
 from ...domain.services.incremental_merge_service import IncrementalMergeService
 from ...domain.services.statistics_service import StatisticsService
 from ...domain.value_objects.unified_message import UnifiedMessage
+from .content_moderation_service import ContentModerationService
 from ...infrastructure.persistence.incremental_store import IncrementalStore
 from ...utils.logger import logger
 
@@ -63,6 +64,7 @@ class AnalysisApplicationService:
         self.analysis_domain_service = analysis_domain_service
         self.incremental_store = incremental_store
         self.incremental_merge_service = incremental_merge_service
+        self.content_moderation_service = ContentModerationService(config_manager)
         self._locks = weakref.WeakValueDictionary()
         # 全局 LLM 分析信号量，控制对外 API 的并发压力
         # 使用专用的 LLM 并发配置项
@@ -274,6 +276,11 @@ class AnalysisApplicationService:
                         chat_quality_enabled=chat_quality_enabled,
                     )
 
+            topics = self.content_moderation_service.moderate_topics(topics)
+            golden_quotes = self.content_moderation_service.moderate_quotes(
+                golden_quotes
+            )
+
             # 回填结果
             statistics.golden_quotes = golden_quotes
             statistics.token_usage = total_token_usage
@@ -462,6 +469,11 @@ class AnalysisApplicationService:
                         golden_quote_enabled=golden_quote_enabled,
                         chat_quality_enabled=chat_quality_enabled,
                     )
+
+            topics = self.content_moderation_service.moderate_topics(topics)
+            golden_quotes = self.content_moderation_service.moderate_quotes(
+                golden_quotes
+            )
 
             # 8. 构建 IncrementalBatch
             # 8a. 转换话题: SummaryTopic -> dict
@@ -748,6 +760,13 @@ class AnalysisApplicationService:
             analysis_result = self.incremental_merge_service.build_analysis_result(
                 state, user_titles
             )
+            analysis_result["topics"] = self.content_moderation_service.moderate_topics(
+                analysis_result.get("topics", [])
+            )
+            moderated_quotes = self.content_moderation_service.moderate_quotes(
+                analysis_result.get("statistics").golden_quotes
+            )
+            analysis_result["statistics"].golden_quotes = moderated_quotes
             group_name = await self._resolve_group_name(adapter, group_id)
 
             # 8. 持久化到 history_manager
