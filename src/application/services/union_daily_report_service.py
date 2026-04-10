@@ -203,13 +203,14 @@ ${topics_text}
 
         total_messages = sum(item.total_messages for item in group_snapshots)
         total_participants = sum(item.participant_count for item in group_snapshots)
+        topic_highlights = self._select_topic_highlights(group_snapshots, all_topics)
 
         return UnionDailyReport(
             report_date=report_date,
             champion_group=champion_group,
             group_snapshots=group_snapshots,
             top_quotes=top_quotes,
-            topic_highlights=all_topics[:6],
+            topic_highlights=topic_highlights,
             water_king=water_king,
             overview=overview,
             total_messages=total_messages,
@@ -632,3 +633,40 @@ ${topics_text}
             "completion_tokens": 0,
             "total_tokens": 0,
         }
+
+    def _select_topic_highlights(
+        self,
+        group_snapshots: list[UnionGroupSnapshot],
+        all_topics: list[UnionTopic],
+        limit: int = 6,
+    ) -> list[UnionTopic]:
+        if limit <= 0 or not all_topics:
+            return []
+
+        selected: list[UnionTopic] = []
+        selected_indexes: set[int] = set()
+
+        # 第一轮：每个有话题的群至少保底 1 条，按群快照顺序选首条。
+        for snapshot in group_snapshots:
+            if len(selected) >= limit:
+                break
+            for index, topic in enumerate(all_topics):
+                if index in selected_indexes:
+                    continue
+                if topic.group_ref != snapshot.group_ref:
+                    continue
+                selected.append(topic)
+                selected_indexes.add(index)
+                break
+
+        # 第二轮：用剩余热点补足名额，仍保持原始排序。
+        if len(selected) < limit:
+            for index, topic in enumerate(all_topics):
+                if index in selected_indexes:
+                    continue
+                selected.append(topic)
+                selected_indexes.add(index)
+                if len(selected) >= limit:
+                    break
+
+        return selected

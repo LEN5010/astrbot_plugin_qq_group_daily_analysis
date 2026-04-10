@@ -365,7 +365,7 @@
     "union_report": {
         "description": "跨群聚合日报",
         "type": "object",
-        "hint": "在单群日报全部生成完后，再对指定群的 JSON 日报做一次跨群聚合，产出“五群联合日报”。",
+        "hint": "在单群日报全部生成完后，再对指定群的 JSON 日报做一次跨群聚合，产出“A海岸联合日报”。",
         "items": {
             "enabled": {
                 "type": "bool",

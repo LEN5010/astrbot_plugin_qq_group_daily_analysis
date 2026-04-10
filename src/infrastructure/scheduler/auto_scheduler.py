@@ -1285,7 +1285,7 @@ class AutoScheduler:
             return 0
 
         output_format = self.config_manager.get_output_format()
-        caption = f"📊 五群联合日报 ({report.report_date})"
+        caption = f"📊 A海岸联合日报 ({report.report_date})"
         html_content = self.union_report_renderer.render_html(report)
         text_content = self.union_report_renderer.render_text(report)
         sent_count = 0
