@@ -254,6 +254,46 @@
             justify-content: space-between;
             gap: 12px;
         }
+
+        .leaderboard {
+            margin-top: 18px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .leaderboard-row {
+            display: grid;
+            grid-template-columns: 56px 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 12px 14px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid var(--line);
+        }
+
+        .leaderboard-rank {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--accent);
+        }
+
+        .leaderboard-name {
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .leaderboard-group {
+            margin-top: 4px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .leaderboard-count {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--champion);
+        }
     </style>
 </head>
 <body>
@@ -294,10 +334,23 @@
                     <h2 class="section-title">全A海岸最能水用户</h2>
                     <p class="overview-text">
                         <strong>{{ report.water_king.nickname }}</strong>
-                        <span style="font-weight: 700;">（ID: {{ report.water_king.user_id }}）</span>
                         今日共发言 {{ report.water_king.message_count }} 条，来自
                         <strong>{{ report.water_king.group_name }}</strong>。
                     </p>
+                    {% if report.runner_up_users %}
+                    <div class="leaderboard">
+                        {% for user in report.runner_up_users %}
+                        <div class="leaderboard-row">
+                            <div class="leaderboard-rank">#{{ user.rank }}</div>
+                            <div>
+                                <div class="leaderboard-name">{{ user.nickname }}</div>
+                                <div class="leaderboard-group">来自 {{ user.group_name }}</div>
+                            </div>
+                            <div class="leaderboard-count">{{ user.message_count }} 条</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                 </article>
             </section>
             {% endif %}

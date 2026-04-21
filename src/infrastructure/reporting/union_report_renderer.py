@@ -47,12 +47,17 @@ class UnionReportRenderer:
                 [
                     (
                         f"💦 全A海岸最能水：{report.water_king.nickname}"
-                        f"（ID: {report.water_king.user_id}）"
                         f" · {report.water_king.message_count} 条"
                         f" · 来自 {report.water_king.group_name}"
                     ),
                 ]
             )
+            if report.runner_up_users:
+                lines.append("📋 全A海岸发言榜 2-6 名")
+                for user in report.runner_up_users:
+                    lines.append(
+                        f"{user.rank}. {user.nickname} · {user.message_count} 条 · {user.group_name}"
+                    )
 
         lines.extend(
             [

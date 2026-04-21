@@ -74,6 +74,7 @@ class UnionWaterKing:
     group_ref: str
     group_name: str
     platform_id: str
+    rank: int = 0
 
 
 @dataclass
@@ -86,6 +87,7 @@ class UnionDailyReport:
     top_quotes: list[UnionQuote]
     topic_highlights: list[UnionTopic]
     water_king: UnionWaterKing | None
+    runner_up_users: list[UnionWaterKing]
     overview: str
     total_messages: int
     total_participants: int
@@ -106,6 +108,7 @@ class UnionDailyReportService:
 输出要求：
 - 只返回 JSON。
 - `top_quotes` 必须是 3 条以内。
+- 在质量接近时，优先让 Top 3 覆盖不同群，避免同一个群重复霸榜。
 - 不要编造未出现在输入中的群号、金句原文或发言人。
 - 点评要有整体感，既要提到最活跃群，也要概括 A海岸整体共性与差异。
 
@@ -140,7 +143,7 @@ ${topics_text}
         group_snapshots: list[UnionGroupSnapshot] = []
         all_quotes: list[UnionQuote] = []
         all_topics: list[UnionTopic] = []
-        water_king: UnionWaterKing | None = None
+        all_active_users: list[UnionWaterKing] = []
         missing_groups: list[str] = []
 
         for group_ref in normalized_group_refs:
@@ -153,14 +156,13 @@ ${topics_text}
 
             snapshot = self._build_group_snapshot(group_ref, analysis_result)
             group_snapshots.append(snapshot)
-            water_king = self._pick_water_king(
-                current=water_king,
-                candidate=self._extract_water_king(
+            all_active_users.extend(
+                self._extract_active_users(
                     snapshot.group_ref,
                     snapshot.platform_id,
                     snapshot.group_name,
                     analysis_result,
-                ),
+                )
             )
             all_quotes.extend(
                 self._extract_quotes(
@@ -205,6 +207,9 @@ ${topics_text}
         total_messages = sum(item.total_messages for item in group_snapshots)
         total_participants = sum(item.participant_count for item in group_snapshots)
         topic_highlights = self._select_topic_highlights(group_snapshots, all_topics)
+        ranked_users = self._rank_active_users(all_active_users)
+        water_king = ranked_users[0] if ranked_users else None
+        runner_up_users = ranked_users[1:6]
 
         return UnionDailyReport(
             report_date=report_date,
@@ -213,6 +218,7 @@ ${topics_text}
             top_quotes=top_quotes,
             topic_highlights=topic_highlights,
             water_king=water_king,
+            runner_up_users=runner_up_users,
             overview=overview,
             total_messages=total_messages,
             total_participants=total_participants,
@@ -337,18 +343,18 @@ ${topics_text}
 
         return quotes
 
-    def _extract_water_king(
+    def _extract_active_users(
         self,
         group_ref: str,
         platform_id: str,
         group_name: str,
         analysis_result: dict[str, Any],
-    ) -> UnionWaterKing | None:
+    ) -> list[UnionWaterKing]:
         raw_user_analysis = analysis_result.get("user_analysis", {}) or {}
         if not isinstance(raw_user_analysis, dict):
-            return None
+            return []
 
-        best_user: UnionWaterKing | None = None
+        users: list[UnionWaterKing] = []
         for user_id, raw_stats in raw_user_analysis.items():
             if not isinstance(raw_stats, dict):
                 continue
@@ -357,42 +363,38 @@ ${topics_text}
             if message_count <= 0:
                 continue
 
-            nickname = str(raw_stats.get("nickname") or user_id).strip() or str(user_id)
-            candidate = UnionWaterKing(
-                user_id=str(user_id).strip(),
-                nickname=nickname,
-                message_count=message_count,
-                group_ref=group_ref,
-                group_name=group_name,
-                platform_id=platform_id,
+            nickname = str(raw_stats.get("nickname") or "").strip()
+            if not nickname or nickname == str(user_id).strip():
+                nickname = "群友"
+            users.append(
+                UnionWaterKing(
+                    user_id=str(user_id).strip(),
+                    nickname=nickname,
+                    message_count=message_count,
+                    group_ref=group_ref,
+                    group_name=group_name,
+                    platform_id=platform_id,
+                )
             )
-            best_user = self._pick_water_king(best_user, candidate)
 
-        return best_user
+        return users
 
-    def _pick_water_king(
+    def _rank_active_users(
         self,
-        current: UnionWaterKing | None,
-        candidate: UnionWaterKing | None,
-    ) -> UnionWaterKing | None:
-        if candidate is None:
-            return current
-        if current is None:
-            return candidate
-
-        current_key = (
-            current.message_count,
-            current.group_name,
-            current.nickname,
-            current.user_id,
+        users: list[UnionWaterKing],
+    ) -> list[UnionWaterKing]:
+        ranked_users = sorted(
+            users,
+            key=lambda item: (
+                -item.message_count,
+                item.group_name,
+                item.nickname,
+                item.user_id,
+            ),
         )
-        candidate_key = (
-            candidate.message_count,
-            candidate.group_name,
-            candidate.nickname,
-            candidate.user_id,
-        )
-        return candidate if candidate_key > current_key else current
+        for index, user in enumerate(ranked_users, 1):
+            user.rank = index
+        return ranked_users
 
     def _extract_topics(
         self,
@@ -550,9 +552,12 @@ ${topics_text}
                 champion_group, group_snapshots, all_quotes, token_usage
             )
 
-        top_quotes = self._map_llm_quotes(parsed.get("top_quotes"), all_quotes)
+        top_quotes = self._rebalance_top_quotes(
+            preferred_quotes=self._map_llm_quotes(parsed.get("top_quotes"), all_quotes),
+            fallback_quotes=all_quotes,
+        )
         if not top_quotes:
-            top_quotes = all_quotes[:3]
+            top_quotes = self._select_balanced_top_quotes(all_quotes)
 
         overview = str(parsed.get("global_commentary", "")).strip()
         if not overview:
@@ -583,13 +588,14 @@ ${topics_text}
             f"消息 {champion_group.total_messages}"
         )
 
+        balanced_quote_candidates = self._build_balanced_quote_candidates(all_quotes)
         quotes_text = "\n".join(
             [
                 (
                     f"{index}. [{quote.group_name}] "
                     f"{quote.sender}: {quote.content} | 理由: {quote.reason}"
                 )
-                for index, quote in enumerate(all_quotes[:20], 1)
+                for index, quote in enumerate(balanced_quote_candidates, 1)
             ]
         )
         topics_text = "\n".join(
@@ -607,13 +613,19 @@ ${topics_text}
         if not prompt_template:
             prompt_template = self._DEFAULT_PROMPT
 
-        return render_template(
+        rendered_prompt = render_template(
             prompt_template,
             report_date=report_date,
             groups_summary_text="\n".join(groups_summary_lines),
             quotes_text=quotes_text or "无可用金句",
             topics_text=topics_text or "无可用话题",
         )
+        fairness_guard = (
+            "\n\n额外约束：请尽量保证金句覆盖不同群。"
+            "若多个候选质量接近，优先每个群最多入选 1 条；"
+            "只有明显优势时才允许同群重复入选。"
+        )
+        return f"{rendered_prompt}{fairness_guard}"
 
     def _build_union_report_schema(self) -> JSONObject:
         return {
@@ -691,7 +703,7 @@ ${topics_text}
         all_quotes: list[UnionQuote],
         token_usage: dict[str, int] | None = None,
     ) -> tuple[list[UnionQuote], str, dict[str, int]]:
-        top_quotes = all_quotes[:3]
+        top_quotes = self._select_balanced_top_quotes(all_quotes)
         total_messages = sum(item.total_messages for item in group_snapshots)
         total_participants = sum(item.participant_count for item in group_snapshots)
         overview = (
@@ -704,6 +716,92 @@ ${topics_text}
             "completion_tokens": 0,
             "total_tokens": 0,
         }
+
+    def _build_balanced_quote_candidates(
+        self,
+        all_quotes: list[UnionQuote],
+        total_limit: int = 18,
+        per_group_limit: int = 3,
+    ) -> list[UnionQuote]:
+        if total_limit <= 0 or not all_quotes:
+            return []
+
+        grouped_quotes: dict[str, list[UnionQuote]] = {}
+        group_order: list[str] = []
+        for quote in all_quotes:
+            if quote.group_ref not in grouped_quotes:
+                grouped_quotes[quote.group_ref] = []
+                group_order.append(quote.group_ref)
+            if len(grouped_quotes[quote.group_ref]) >= per_group_limit:
+                continue
+            grouped_quotes[quote.group_ref].append(quote)
+
+        selected: list[UnionQuote] = []
+        group_indexes = {group_ref: 0 for group_ref in group_order}
+        while len(selected) < total_limit:
+            appended = False
+            for group_ref in group_order:
+                group_quotes = grouped_quotes.get(group_ref, [])
+                index = group_indexes[group_ref]
+                if index >= len(group_quotes):
+                    continue
+                selected.append(group_quotes[index])
+                group_indexes[group_ref] = index + 1
+                appended = True
+                if len(selected) >= total_limit:
+                    break
+            if not appended:
+                break
+
+        return selected
+
+    def _select_balanced_top_quotes(
+        self,
+        quotes: list[UnionQuote],
+        limit: int = 3,
+    ) -> list[UnionQuote]:
+        if limit <= 0 or not quotes:
+            return []
+        return self._rebalance_top_quotes(
+            preferred_quotes=quotes,
+            fallback_quotes=quotes,
+            limit=limit,
+        )
+
+    def _rebalance_top_quotes(
+        self,
+        preferred_quotes: list[UnionQuote],
+        fallback_quotes: list[UnionQuote],
+        limit: int = 3,
+    ) -> list[UnionQuote]:
+        if limit <= 0:
+            return []
+
+        selected: list[UnionQuote] = []
+        selected_keys: set[tuple[str, str, str]] = set()
+        selected_groups: set[str] = set()
+
+        def _append_candidates(
+            quotes: list[UnionQuote],
+            require_new_group: bool,
+        ) -> None:
+            for quote in quotes:
+                if len(selected) >= limit:
+                    return
+                quote_key = (quote.group_ref, quote.sender, quote.content)
+                if quote_key in selected_keys:
+                    continue
+                if require_new_group and quote.group_ref in selected_groups:
+                    continue
+                selected.append(quote)
+                selected_keys.add(quote_key)
+                selected_groups.add(quote.group_ref)
+
+        _append_candidates(preferred_quotes, require_new_group=True)
+        _append_candidates(fallback_quotes, require_new_group=True)
+        _append_candidates(preferred_quotes, require_new_group=False)
+        _append_candidates(fallback_quotes, require_new_group=False)
+        return selected[:limit]
 
     def _select_topic_highlights(
         self,
