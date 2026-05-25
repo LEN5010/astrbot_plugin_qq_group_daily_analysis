@@ -1,16 +1,16 @@
 """
 跨群聚合日报应用服务
 
-基于 HistoryRepository 中已落盘的单群 JSON 日报，生成跨群聚合结果。
+基于 HistoryRepository 中已落盘的源群最终 JSON，生成跨群聚合结果。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import re
 from typing import Any
 
-from ...infrastructure.analysis.utils.json_utils import parse_json_object_response
 from ...infrastructure.analysis.utils.llm_utils import (
     call_provider_with_retry,
     extract_response_text,
@@ -49,6 +49,7 @@ class UnionTopic:
     topic: str
     detail: str
     contributors: list[str] = field(default_factory=list)
+    persona_comment: str = ""
 
 
 @dataclass
@@ -62,6 +63,7 @@ class UnionQuote:
     content: str
     sender: str
     reason: str
+    persona_comment: str = ""
 
 
 @dataclass
@@ -133,7 +135,7 @@ ${topics_text}
         report_date: str,
     ) -> UnionDailyReport | None:
         """
-        基于指定群列表的单群 JSON 报告，构建跨群聚合日报。
+        基于指定源群列表的最终 JSON，构建跨群聚合日报。
         """
         normalized_group_refs = self._deduplicate_group_refs(group_refs)
         if not normalized_group_refs:
@@ -183,8 +185,16 @@ ${topics_text}
                 )
             )
 
+        if missing_groups:
+            logger.warning(
+                "跨群聚合日报跳过：%s 源群 JSON 未全部就绪，缺失=%s",
+                report_date,
+                missing_groups,
+            )
+            return None
+
         if not group_snapshots:
-            logger.warning(f"跨群聚合日报跳过：{report_date} 没有任何可用单群 JSON 结果")
+            logger.warning("跨群聚合日报跳过：%s 没有任何可用源群 JSON 结果", report_date)
             return None
 
         champion_group = max(
@@ -196,17 +206,29 @@ ${topics_text}
             ),
         )
 
-        top_quotes, overview, token_usage = await self._generate_llm_summary(
+        summary_result = await self._generate_llm_summary(
             report_date=report_date,
             champion_group=champion_group,
             group_snapshots=group_snapshots,
             all_quotes=all_quotes,
             all_topics=all_topics,
         )
+        if summary_result is None:
+            return None
+        top_quotes, overview, token_usage = summary_result
 
         total_messages = sum(item.total_messages for item in group_snapshots)
         total_participants = sum(item.participant_count for item in group_snapshots)
         topic_highlights = self._select_topic_highlights(group_snapshots, all_topics)
+        comment_usage = await self._generate_persona_comments(
+            top_quotes,
+            topic_highlights,
+        )
+        if comment_usage is None:
+            return None
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            token_usage[key] = token_usage.get(key, 0) + comment_usage.get(key, 0)
+
         ranked_users = self._rank_active_users(all_active_users)
         water_king = ranked_users[0] if ranked_users else None
         runner_up_users = ranked_users[1:6]
@@ -232,7 +254,7 @@ ${topics_text}
         report_date: str,
     ) -> list[str]:
         """
-        检查指定日期下哪些源群的单群 JSON 日报尚未就绪。
+        检查指定日期下哪些源群最终 JSON 尚未就绪。
         """
         missing_group_refs: list[str] = []
         normalized_group_refs = self._deduplicate_group_refs(group_refs)
@@ -512,7 +534,7 @@ ${topics_text}
         group_snapshots: list[UnionGroupSnapshot],
         all_quotes: list[UnionQuote],
         all_topics: list[UnionTopic],
-    ) -> tuple[list[UnionQuote], str, dict[str, int]]:
+    ) -> tuple[list[UnionQuote], str, dict[str, int]] | None:
         prompt = self._build_prompt(
             report_date=report_date,
             champion_group=champion_group,
@@ -522,7 +544,8 @@ ${topics_text}
         )
 
         if not prompt.strip():
-            return self._fallback_summary(champion_group, group_snapshots, all_quotes)
+            logger.warning("跨群聚合日报 LLM Prompt 为空")
+            return None
 
         response = await call_provider_with_retry(
             context=self.llm_context,
@@ -536,36 +559,284 @@ ${topics_text}
         )
 
         if response is None:
-            logger.warning("跨群聚合日报 LLM 调用失败，回退到模板摘要")
-            return self._fallback_summary(champion_group, group_snapshots, all_quotes)
+            logger.warning("跨群聚合日报 LLM 调用失败")
+            return None
 
         result_text = extract_response_text(response)
         token_usage = extract_token_usage(response)
-        ok, parsed, error_message = parse_json_object_response(
-            result_text, "union_daily_report"
-        )
-        if not ok or not isinstance(parsed, dict):
-            logger.warning(
-                f"跨群聚合日报解析失败，回退到模板摘要: {error_message or 'unknown'}"
-            )
-            return self._fallback_summary(
-                champion_group, group_snapshots, all_quotes, token_usage
-            )
+        parsed = self._parse_strict_json_object(result_text)
+        if parsed is None:
+            logger.warning("跨群聚合日报 JSON 严格解析失败")
+            return None
 
-        top_quotes = self._rebalance_top_quotes(
-            preferred_quotes=self._map_llm_quotes(parsed.get("top_quotes"), all_quotes),
-            fallback_quotes=all_quotes,
-        )
-        if not top_quotes:
-            top_quotes = self._select_balanced_top_quotes(all_quotes)
+        raw_top_quotes = parsed.get("top_quotes")
+        if not isinstance(raw_top_quotes, list):
+            logger.warning("跨群聚合日报 top_quotes 字段无效")
+            return None
+        top_quotes = self._map_llm_quotes(raw_top_quotes, all_quotes)
+        if all_quotes and not top_quotes:
+            logger.warning("跨群聚合日报 Top 金句无法映射到候选原文")
+            return None
 
         overview = str(parsed.get("global_commentary", "")).strip()
         if not overview:
-            _, overview, _ = self._fallback_summary(
-                champion_group, group_snapshots, all_quotes, token_usage
-            )
+            logger.warning("跨群聚合日报全局点评为空")
+            return None
 
         return top_quotes[:3], overview, token_usage
+
+    async def _generate_persona_comments(
+        self,
+        top_quotes: list[UnionQuote],
+        topic_highlights: list[UnionTopic],
+    ) -> dict[str, int] | None:
+        """为最终展示的金句与话题生成一句人格点评。"""
+        usage_total = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+
+        group_refs = sorted(
+            {item.group_ref for item in [*top_quotes, *topic_highlights] if item.group_ref}
+        )
+        for group_ref in group_refs:
+            quote_items = [
+                (index, quote)
+                for index, quote in enumerate(top_quotes, 1)
+                if quote.group_ref == group_ref
+            ]
+            topic_items = [
+                (index, topic)
+                for index, topic in enumerate(topic_highlights, 1)
+                if topic.group_ref == group_ref
+            ]
+            if not quote_items and not topic_items:
+                continue
+
+            prompt = self._build_persona_comment_prompt(quote_items, topic_items)
+            system_prompt = await self._build_persona_system_prompt(group_ref)
+            response = await call_provider_with_retry(
+                context=self.llm_context,
+                config_manager=self.config_manager,
+                prompt=prompt,
+                umo=group_ref,
+                provider_id_key="union_report_provider_id",
+                system_prompt=system_prompt,
+                response_format=build_response_format(
+                    "union_persona_comments",
+                    self._build_persona_comment_schema(),
+                ),
+            )
+            if response is None:
+                logger.warning("人格点评 LLM 调用失败: group_ref=%s", group_ref)
+                return None
+
+            result_text = extract_response_text(response)
+            parsed = self._parse_strict_json_object(result_text)
+            if parsed is None:
+                logger.warning("人格点评 JSON 严格解析失败: group_ref=%s", group_ref)
+                return None
+
+            if not self._apply_persona_comments(
+                parsed,
+                quote_items,
+                topic_items,
+            ):
+                logger.warning("人格点评结果不完整: group_ref=%s", group_ref)
+                return None
+
+            usage = extract_token_usage(response)
+            for key in usage_total:
+                usage_total[key] += usage.get(key, 0)
+
+        return usage_total
+
+    @staticmethod
+    def _parse_strict_json_object(result_text: str) -> dict[str, Any] | None:
+        if not isinstance(result_text, str) or not result_text.strip():
+            return None
+
+        try:
+            parsed = json.loads(result_text.strip())
+        except json.JSONDecodeError:
+            return None
+
+        return parsed if isinstance(parsed, dict) else None
+
+    def _build_persona_comment_prompt(
+        self,
+        quote_items: list[tuple[int, UnionQuote]],
+        topic_items: list[tuple[int, UnionTopic]],
+    ) -> str:
+        quote_lines = [
+            (
+                f"{index}. 群：{quote.group_name}；发言人：{quote.sender}；"
+                f"金句：{quote.content}；入选理由：{quote.reason}"
+            )
+            for index, quote in quote_items
+        ]
+        topic_lines = [
+            (
+                f"{index}. 群：{topic.group_name}；话题：{topic.topic}；"
+                f"参与者：{'、'.join(topic.contributors[:4]) or '群友'}；详情：{topic.detail}"
+            )
+            for index, topic in topic_items
+        ]
+        return (
+            "你要为跨群联合日报中最终展示的条目写一句人格点评。\n"
+            "要求：\n"
+            "- 只返回 JSON。\n"
+            "- 每个输入条目必须返回且只返回一句 comment。\n"
+            "- comment 要体现你当前人格的观察角度，不要复述原文，不要超过 35 个汉字。\n"
+            "- 不要编造输入中不存在的人名、群名或事实。\n\n"
+            "金句条目：\n"
+            f"{chr(10).join(quote_lines) or '无'}\n\n"
+            "话题条目：\n"
+            f"{chr(10).join(topic_lines) or '无'}\n\n"
+            "返回格式：\n"
+            "{\n"
+            '  "quote_comments": [{"index": 1, "comment": "一句点评"}],\n'
+            '  "topic_comments": [{"index": 1, "comment": "一句点评"}]\n'
+            "}"
+        )
+
+    def _build_persona_comment_schema(self) -> JSONObject:
+        comment_item = {
+            "type": "object",
+            "properties": {
+                "index": {"type": "integer"},
+                "comment": {"type": "string"},
+            },
+            "required": ["index", "comment"],
+            "additionalProperties": False,
+        }
+        return {
+            "type": "object",
+            "properties": {
+                "quote_comments": {"type": "array", "items": comment_item},
+                "topic_comments": {"type": "array", "items": comment_item},
+            },
+            "required": ["quote_comments", "topic_comments"],
+            "additionalProperties": False,
+        }
+
+    def _apply_persona_comments(
+        self,
+        parsed: dict[str, Any],
+        quote_items: list[tuple[int, UnionQuote]],
+        topic_items: list[tuple[int, UnionTopic]],
+    ) -> bool:
+        quote_targets = {index: quote for index, quote in quote_items}
+        topic_targets = {index: topic for index, topic in topic_items}
+        quote_comments = self._extract_comment_map(parsed.get("quote_comments"))
+        topic_comments = self._extract_comment_map(parsed.get("topic_comments"))
+
+        if set(quote_comments) != set(quote_targets):
+            return False
+        if set(topic_comments) != set(topic_targets):
+            return False
+
+        for index, comment in quote_comments.items():
+            quote_targets[index].persona_comment = comment
+        for index, comment in topic_comments.items():
+            topic_targets[index].persona_comment = comment
+        return True
+
+    @staticmethod
+    def _extract_comment_map(raw_items: Any) -> dict[int, str]:
+        if not isinstance(raw_items, list):
+            return {}
+
+        comments: dict[int, str] = {}
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
+            comment = str(item.get("comment", "")).strip()
+            if index > 0 and comment:
+                comments[index] = comment
+        return comments
+
+    async def _build_persona_system_prompt(self, group_ref: str) -> str | None:
+        """复用 AstrBot 人格优先级，为指定源群构建 system_prompt。"""
+        persona_mgr = getattr(self.llm_context, "persona_manager", None)
+        if persona_mgr is None:
+            return None
+
+        use_specific = self.config_manager.get_use_plugin_specific_persona()
+        specific_id = self.config_manager.get_plugin_specific_persona_id()
+        keep_original = self.config_manager.get_keep_original_persona()
+        persona_prompt: str | None = None
+
+        if use_specific and specific_id:
+            try:
+                persona_obj = await persona_mgr.get_persona(specific_id)
+                persona_prompt = (
+                    getattr(persona_obj, "system_prompt", None)
+                    or getattr(persona_obj, "prompt", None)
+                )
+            except Exception as e:
+                logger.warning("获取插件指定人格失败 (ID: %s): %s", specific_id, e)
+
+        if not persona_prompt and keep_original and group_ref:
+            try:
+                from astrbot.api import sp
+
+                session_config = await sp.get_async(
+                    scope="umo",
+                    scope_id=str(group_ref),
+                    key="session_service_config",
+                    default={},
+                )
+                persona_id = (
+                    session_config.get("persona_id")
+                    if isinstance(session_config, dict)
+                    else None
+                )
+                if persona_id and persona_id != "[%None]":
+                    persona_obj = await persona_mgr.get_persona(persona_id)
+                    persona_prompt = (
+                        getattr(persona_obj, "system_prompt", None)
+                        or getattr(persona_obj, "prompt", None)
+                    )
+
+                if not persona_prompt:
+                    conv_mgr = getattr(self.llm_context, "conversation_manager", None)
+                    if conv_mgr:
+                        curr_conv_id = await conv_mgr.get_curr_conversation_id(
+                            group_ref
+                        )
+                        if curr_conv_id:
+                            conv_obj = await conv_mgr.get_conversation(
+                                group_ref,
+                                curr_conv_id,
+                            )
+                            conv_persona_id = getattr(conv_obj, "persona_id", None)
+                            if conv_persona_id and conv_persona_id != "[%None]":
+                                persona_obj = await persona_mgr.get_persona(
+                                    conv_persona_id
+                                )
+                                persona_prompt = (
+                                    getattr(persona_obj, "system_prompt", None)
+                                    or getattr(persona_obj, "prompt", None)
+                                )
+
+                if not persona_prompt:
+                    personality = await persona_mgr.get_default_persona_v3(group_ref)
+                    if isinstance(personality, dict):
+                        persona_prompt = personality.get("prompt")
+                    else:
+                        persona_prompt = getattr(personality, "prompt", None)
+            except Exception as e:
+                logger.warning("人格回溯识别失败 (group_ref=%s): %s", group_ref, e)
+
+        if not isinstance(persona_prompt, str) or not persona_prompt.strip():
+            return None
+        return persona_prompt.strip()
 
     def _build_prompt(
         self,
@@ -668,25 +939,23 @@ ${topics_text}
                 continue
 
             raw_content = str(raw_quote.get("content", "")).strip()
+            raw_sender = str(raw_quote.get("sender", "")).strip()
             raw_group_ref = str(raw_quote.get("group_ref", "")).strip()
+            if not raw_content or not raw_sender or not raw_group_ref:
+                continue
 
             matched_index = None
             for index, source_quote in enumerate(source_quotes):
                 if index in used_indexes:
                     continue
-                if raw_group_ref and source_quote.group_ref != raw_group_ref:
+                if source_quote.group_ref != raw_group_ref:
                     continue
-                if raw_content and source_quote.content == raw_content:
+                if (
+                    source_quote.content == raw_content
+                    and source_quote.sender == raw_sender
+                ):
                     matched_index = index
                     break
-
-            if matched_index is None and raw_content:
-                for index, source_quote in enumerate(source_quotes):
-                    if index in used_indexes:
-                        continue
-                    if raw_content in source_quote.content or source_quote.content in raw_content:
-                        matched_index = index
-                        break
 
             if matched_index is None:
                 continue
@@ -695,27 +964,6 @@ ${topics_text}
             used_indexes.add(matched_index)
 
         return matched_quotes
-
-    def _fallback_summary(
-        self,
-        champion_group: UnionGroupSnapshot,
-        group_snapshots: list[UnionGroupSnapshot],
-        all_quotes: list[UnionQuote],
-        token_usage: dict[str, int] | None = None,
-    ) -> tuple[list[UnionQuote], str, dict[str, int]]:
-        top_quotes = self._select_balanced_top_quotes(all_quotes)
-        total_messages = sum(item.total_messages for item in group_snapshots)
-        total_participants = sum(item.participant_count for item in group_snapshots)
-        overview = (
-            f"今日 A海岸累计消息 {total_messages} 条，总参与人数 {total_participants}。"
-            f"最活跃的是 {champion_group.group_name}，贡献了 {champion_group.total_messages} 条消息。"
-            "整体讨论既有延续性，也有明显的热点扩散，适合作为后续重点维护与二次互动的素材池。"
-        )
-        return top_quotes, overview, token_usage or {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        }
 
     def _build_balanced_quote_candidates(
         self,
@@ -754,54 +1002,6 @@ ${topics_text}
                 break
 
         return selected
-
-    def _select_balanced_top_quotes(
-        self,
-        quotes: list[UnionQuote],
-        limit: int = 3,
-    ) -> list[UnionQuote]:
-        if limit <= 0 or not quotes:
-            return []
-        return self._rebalance_top_quotes(
-            preferred_quotes=quotes,
-            fallback_quotes=quotes,
-            limit=limit,
-        )
-
-    def _rebalance_top_quotes(
-        self,
-        preferred_quotes: list[UnionQuote],
-        fallback_quotes: list[UnionQuote],
-        limit: int = 3,
-    ) -> list[UnionQuote]:
-        if limit <= 0:
-            return []
-
-        selected: list[UnionQuote] = []
-        selected_keys: set[tuple[str, str, str]] = set()
-        selected_groups: set[str] = set()
-
-        def _append_candidates(
-            quotes: list[UnionQuote],
-            require_new_group: bool,
-        ) -> None:
-            for quote in quotes:
-                if len(selected) >= limit:
-                    return
-                quote_key = (quote.group_ref, quote.sender, quote.content)
-                if quote_key in selected_keys:
-                    continue
-                if require_new_group and quote.group_ref in selected_groups:
-                    continue
-                selected.append(quote)
-                selected_keys.add(quote_key)
-                selected_groups.add(quote.group_ref)
-
-        _append_candidates(preferred_quotes, require_new_group=True)
-        _append_candidates(fallback_quotes, require_new_group=True)
-        _append_candidates(preferred_quotes, require_new_group=False)
-        _append_candidates(fallback_quotes, require_new_group=False)
-        return selected[:limit]
 
     def _select_topic_highlights(
         self,

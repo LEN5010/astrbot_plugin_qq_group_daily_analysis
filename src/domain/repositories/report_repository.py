@@ -9,35 +9,17 @@ from typing import Any
 
 class IReportGenerator(ABC):
     """
-    报告生成器接口
+    联合日报图片渲染接口
     """
 
     @abstractmethod
-    async def generate_image_report(
+    async def render_html_content_to_image(
         self,
-        analysis_result: dict,
+        html_content: str,
         group_id: str,
         html_render_func: Any,
-        avatar_url_getter: Any = None,
-        nickname_getter: Any = None,
-    ) -> tuple[str | None, str | None]:
-        """生成图片报告"""
-        pass
-
-    @abstractmethod
-    async def generate_html_report(
-        self,
-        analysis_result: dict,
-        group_id: str,
-        avatar_url_getter: Any = None,
-        nickname_getter: Any = None,
-    ) -> tuple[str | None, str | None]:
-        """生成 HTML 报告"""
-        pass
-
-    @abstractmethod
-    def generate_text_report(self, analysis_result: dict) -> str:
-        """生成文本报告"""
+    ) -> str | None:
+        """将联合日报 HTML 渲染为图片"""
         pass
 
     @abstractmethod

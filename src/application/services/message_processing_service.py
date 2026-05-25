@@ -16,7 +16,7 @@ class MessageProcessingService:
     1. 解析消息内容（文本、图片、@提及等）
     2. 解析发送者信息（跨平台兼容）
     3. 存储消息历史
-    4. 维护 Telegram 群组注册表（回退机制）
+    4. 维护 Telegram 群组注册表
     """
 
     def __init__(self, context: Context, telegram_registry: TelegramGroupRegistry):
@@ -45,7 +45,7 @@ class MessageProcessingService:
             raise ValueError(f"群 {group_id}: 无法获取发送者 ID，拒绝存储消息")
         sender_id = str(sender_id)
 
-        # 3. 获取发送者名称（昵称优先，必要时回退）
+        # 3. 获取发送者名称（昵称优先）
         sender_name = self._resolve_sender_name(event, sender_id)
 
         # 4. 获取平台 ID（必需）

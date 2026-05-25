@@ -1,7 +1,7 @@
 """
 Feishu/Lark 平台适配器
 
-复用 AstrBot 已有 lark_oapi 生态能力，实现飞书群分析消息读取、成员信息与头像获取。
+复用 AstrBot 已有 lark_oapi 生态能力，实现飞书群消息读取、成员信息与头像获取。
 """
 
 from __future__ import annotations

@@ -51,7 +51,7 @@ class StatisticsService:
                 elif content.type == MessageContentType.IMAGE:
                     # 兼容识别“图片形态的表情”:
                     # 1) 优先使用 onebot sub_type=1 信号
-                    # 2) 若无该字段，再回退到历史 summary 文本匹配
+                    # 2) 若无该字段，再检查 summary 文本
                     if self._is_emoji_like_image(content.raw_data):
                         emoji_statistics.mface_count += 1
                 elif content.type in (
@@ -70,8 +70,7 @@ class StatisticsService:
         )
 
         # 生成活跃度可视化数据
-        # 注意：ActivityVisualizer 可能需要迁移以支持 UnifiedMessage
-        # 目前先转换回 dict 以保持兼容性，或者之后重构它
+        # ActivityVisualizer 接收 legacy dict，这里做一次格式转换。
         raw_msgs = self._convert_to_legacy_dict(messages)
         activity_visualization = (
             self.activity_visualizer.generate_activity_visualization(raw_msgs)
@@ -106,7 +105,7 @@ class StatisticsService:
         return "动画表情" in text or "表情" in text
 
     def _convert_to_legacy_dict(self, messages: list[UnifiedMessage]) -> list[dict]:
-        """内部辅助：将 UnifiedMessage 转换为 Legacy Dict 格式，用于兼容可视化组件"""
+        """内部辅助：将 UnifiedMessage 转换为 ActivityVisualizer 所需格式。"""
         legacy_list = []
         for msg in messages:
             legacy_list.append(

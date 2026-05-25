@@ -91,17 +91,6 @@ class IMessageSender(ABC):
         """
         pass
 
-    @abstractmethod
-    async def send_file(
-        self,
-        group_id: str,
-        file_path: str,
-        filename: str | None = None,
-    ) -> bool:
-        """发送文件"""
-        pass
-
-
 class IGroupInfoRepository(ABC):
     """群组信息仓储接口"""
 

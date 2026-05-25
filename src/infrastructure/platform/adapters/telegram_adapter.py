@@ -89,16 +89,10 @@ class TelegramAdapter(PlatformAdapter):
         获取群组列表
 
         Telegram Bot API 不支持直接获取群列表。
-        因此这里尝试结合多种策略：
-        1. 尝试调用 API (如果未来支持)
-        2. 回退：从插件的 KV 存储中获取已知群组 (需注入插件实例)
+        因此这里从插件的 KV 存储中读取已见群组。
         """
         groups = []
 
-        # 1. 尝试 API (目前 python-telegram-bot 不支持直接列出所有 chat)
-        # 如果 client 有扩展方法或未来支持，可在此实现
-
-        # 2. 回退：使用 KV 注册表
         if not groups and self._plugin_instance:
             try:
                 # 检查插件实例是否有 get_telegram_seen_group_ids 方法
@@ -109,10 +103,10 @@ class TelegramAdapter(PlatformAdapter):
                     if kv_groups:
                         groups.extend(kv_groups)
                         logger.debug(
-                            f"[Telegram] 通过 KV 回退获取到 {len(kv_groups)} 个群组"
+                            f"[Telegram] 通过 KV 注册表获取到 {len(kv_groups)} 个群组"
                         )
             except Exception as e:
-                logger.warning(f"[Telegram] KV 回退获取群列表失败: {e}")
+                logger.warning(f"[Telegram] KV 注册表获取群列表失败: {e}")
 
         if not groups:
             logger.debug("[Telegram] 无法获取群列表 (API不支持且无KV记录)")

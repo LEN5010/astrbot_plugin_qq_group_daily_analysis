@@ -1,9 +1,6 @@
 """
 报告生成模块
-包含HTML、图片、文本报告生成功能
+包含联合日报渲染与 HTML 转图片工具。
 """
 
-from .generators import ReportGenerator
-from .templates import HTMLTemplates
-
-__all__ = ["ReportGenerator", "HTMLTemplates"]
+__all__: list[str] = []

@@ -1,127 +1,63 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
-
-
-class TopicItemModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    topic: str
-    contributors: list[str]
-    detail: str
-
-    @field_validator("topic", "detail", mode="before")
-    @classmethod
-    def _normalize_text(cls, value: object) -> str:
-        return str(value).strip()
-
-    @field_validator("contributors", mode="before")
-    @classmethod
-    def _normalize_contributors(cls, value: object) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        contributors: list[str] = []
-        for item in value:
-            text = str(item).strip()
-            if text:
-                contributors.append(text)
-        return contributors
-
-
-class UserTitleItemModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    user_id: str
-    title: str
-    mbti: str
-    reason: str
-
-    @field_validator("name", "user_id", "title", "mbti", "reason", mode="before")
-    @classmethod
-    def _normalize_text(cls, value: object) -> str:
-        return str(value).strip()
-
-
-class GoldenQuoteItemModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    content: str
-    sender: str
-    reason: str
-
-    @field_validator("content", "sender", "reason", mode="before")
-    @classmethod
-    def _normalize_text(cls, value: object) -> str:
-        return str(value).strip()
-
-
-class QualityDimensionModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    percentage: float
-    comment: str
-
-    @field_validator("name", "comment", mode="before")
-    @classmethod
-    def _normalize_text(cls, value: object) -> str:
-        return str(value).strip()
-
-
-class QualityReviewModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    title: str
-    subtitle: str
-    dimensions: list[QualityDimensionModel]
-    summary: str
-
-    @field_validator("title", "subtitle", "summary", mode="before")
-    @classmethod
-    def _normalize_text(cls, value: object) -> str:
-        return str(value).strip()
-
 
 def validate_topic_items(
     data_list: list[dict],
 ) -> tuple[bool, list[dict] | None, str | None]:
-    try:
-        normalized = [
-            TopicItemModel.model_validate(item).model_dump() for item in data_list
-        ]
-        return True, normalized, None
-    except ValidationError as e:
-        return False, None, str(e)
+    normalized: list[dict] = []
+    for index, item in enumerate(data_list, start=1):
+        if not isinstance(item, dict):
+            return False, None, f"topic[{index}] is not object"
 
+        extra_keys = set(item) - {"topic", "contributors", "detail"}
+        if extra_keys:
+            return False, None, f"topic[{index}] has extra keys: {sorted(extra_keys)}"
 
-def validate_user_title_items(
-    data_list: list[dict],
-) -> tuple[bool, list[dict] | None, str | None]:
-    try:
-        normalized = [
-            UserTitleItemModel.model_validate(item).model_dump() for item in data_list
-        ]
-        return True, normalized, None
-    except ValidationError as e:
-        return False, None, str(e)
+        topic = str(item.get("topic", "")).strip()
+        detail = str(item.get("detail", "")).strip()
+        contributors_raw = item.get("contributors")
+        if not topic or not detail:
+            return False, None, f"topic[{index}] missing topic/detail"
+        if not isinstance(contributors_raw, list):
+            return False, None, f"topic[{index}] contributors must be array"
+
+        contributors = [str(value).strip() for value in contributors_raw]
+        contributors = [value for value in contributors if value]
+        normalized.append(
+            {
+                "topic": topic,
+                "contributors": contributors,
+                "detail": detail,
+            }
+        )
+
+    return True, normalized, None
 
 
 def validate_golden_quote_items(
     data_list: list[dict],
 ) -> tuple[bool, list[dict] | None, str | None]:
-    try:
-        normalized = [
-            GoldenQuoteItemModel.model_validate(item).model_dump() for item in data_list
-        ]
-        return True, normalized, None
-    except ValidationError as e:
-        return False, None, str(e)
+    normalized: list[dict] = []
+    for index, item in enumerate(data_list, start=1):
+        if not isinstance(item, dict):
+            return False, None, f"quote[{index}] is not object"
 
+        extra_keys = set(item) - {"content", "sender", "reason"}
+        if extra_keys:
+            return False, None, f"quote[{index}] has extra keys: {sorted(extra_keys)}"
 
-def validate_quality_review_item(data: dict) -> tuple[bool, dict | None, str | None]:
-    try:
-        normalized = QualityReviewModel.model_validate(data).model_dump()
-        return True, normalized, None
-    except ValidationError as e:
-        return False, None, str(e)
+        content = str(item.get("content", "")).strip()
+        sender = str(item.get("sender", "")).strip()
+        reason = str(item.get("reason", "")).strip()
+        if not content or not sender or not reason:
+            return False, None, f"quote[{index}] missing content/sender/reason"
+
+        normalized.append(
+            {
+                "content": content,
+                "sender": sender,
+                "reason": reason,
+            }
+        )
+
+    return True, normalized, None

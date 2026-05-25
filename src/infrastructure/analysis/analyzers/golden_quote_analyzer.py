@@ -9,10 +9,9 @@ from ....domain.models.data_models import GoldenQuote, TokenUsage
 from ....utils.logger import logger
 from ...utils.template_utils import render_template
 from ..utils import InfoUtils
-from ..utils.json_utils import extract_golden_quotes_with_regex
 from ..utils.response_validation import validate_golden_quote_items
 from ..utils.structured_output_schema import JSONObject, build_golden_quotes_schema
-from .base_analyzer import BaseAnalyzer
+from .base_analyzer import BaseAnalyzer, LLMAnalysisError
 
 
 class GoldenQuoteAnalyzer(BaseAnalyzer[GoldenQuote, list[dict]]):
@@ -78,19 +77,6 @@ class GoldenQuoteAnalyzer(BaseAnalyzer[GoldenQuote, list[dict]]):
 
         logger.warning("未找到有效的金句分析提示词配置，请检查配置文件")
         return ""
-
-    def extract_with_regex(self, result_text: str, max_count: int) -> list[dict]:
-        """
-        使用正则表达式提取金句信息
-
-        Args:
-            result_text: LLM响应文本
-            max_count: 最大提取数量
-
-        Returns:
-            金句数据列表
-        """
-        return extract_golden_quotes_with_regex(result_text, max_count)
 
     def create_data_objects(self, data_list: list[dict]) -> list[GoldenQuote]:
         """
@@ -183,6 +169,8 @@ class GoldenQuoteAnalyzer(BaseAnalyzer[GoldenQuote, list[dict]]):
 
             return quotes, usage
 
+        except LLMAnalysisError:
+            raise
         except Exception as e:
             logger.error(f"金句分析失败: {e}")
             return [], TokenUsage()

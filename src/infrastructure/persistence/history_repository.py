@@ -20,8 +20,7 @@ class HistoryRepository:
     """
     基础设施：历史仓库
 
-    负责群聊分析历史记录的持久化存储与检索。目前使用本地 JSON 文件实现，
-    保持了与旧版 `history_manager` 的数据格式兼容性。
+    负责源群最终 JSON 的持久化存储与检索。目前使用本地 JSON 文件实现。
 
     Attributes:
         data_dir (Path): 插件数据存储的总根目录
@@ -266,10 +265,8 @@ class HistoryRepository:
                 except Exception:
                     group_id = None
 
-                if not group_id:
-                    # 兼容旧文件名回退
-                    group_id = file_path.stem.replace("group_", "")
-                groups.append(group_id)
+                if group_id:
+                    groups.append(group_id)
             return groups
         except Exception as e:
             logger.error(f"列出历史记录群组失败: {e}")

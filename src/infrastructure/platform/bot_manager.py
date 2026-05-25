@@ -205,20 +205,16 @@ class BotManager:
         """检查是否有配置的机器人 ID"""
         return bool(self._bot_self_ids)
 
-    def is_ready_for_auto_analysis(self) -> bool:
-        """检查是否准备好进行了自动分析"""
+    def is_ready_for_union_tasks(self) -> bool:
+        """检查是否准备好执行增量与联合日报任务。"""
         if not self.has_bot_instance():
-            logger.debug("[BotManager] 自动分析就绪检查失败：没有可用的 bot 实例。")
+            logger.debug("[BotManager] 联合日报任务就绪检查失败：没有可用的 bot 实例。")
             return False
 
         if not self.has_bot_self_id():
-            # 允许在没有配置/自动提取到 ID 的情况下尝试，但记录调试信息
-            # 这有助于诊断某些平台（如 Telegram）自动获取 ID 失败的情况
             logger.debug(
-                "[BotManager] 自动分析就绪检查警告：bot_self_ids 列表为空。可能会影响消息过滤能力。"
+                "[BotManager] 联合日报任务就绪检查警告：bot_self_ids 列表为空。可能会影响消息过滤能力。"
             )
-            # 为了解决 #128 及其后续反馈，我们将此检查放宽
-            # 只要有 bot 实例就可以尝试运行
             return True
 
         return True
@@ -379,7 +375,7 @@ class BotManager:
 
                 # 知识点发现: 记录元数据以调试自定义 ID
                 logger.info(
-                    f"[群分析插件 BotManager]: Log metadata for debugging custom IDs ,Platform: {platform_id}, Metadata Type: {getattr(metadata, 'type', 'N/A') if not isinstance(metadata, Mapping) else metadata.get('type', 'N/A')}, Metadata Name: {getattr(metadata, 'name', 'N/A') if not isinstance(metadata, Mapping) else metadata.get('name', 'N/A')}"
+                    f"[联合日报插件 BotManager]: Log metadata for debugging custom IDs ,Platform: {platform_id}, Metadata Type: {getattr(metadata, 'type', 'N/A') if not isinstance(metadata, Mapping) else metadata.get('type', 'N/A')}, Metadata Name: {getattr(metadata, 'name', 'N/A') if not isinstance(metadata, Mapping) else metadata.get('name', 'N/A')}"
                 )
 
                 # 从元数据检测平台名称
@@ -467,7 +463,7 @@ class BotManager:
             "platform_count": len(self._bot_instances),
             "platforms": list(self._bot_instances.keys()),
             "adapters": adapter_info,  # DDD 集成信息
-            "ready_for_auto_analysis": self.is_ready_for_auto_analysis(),
+            "ready_for_union_tasks": self.is_ready_for_union_tasks(),
         }
 
     def update_from_event(self, event):

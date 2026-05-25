@@ -8,7 +8,7 @@ class TelegramGroupRegistry:
     """
     Telegram 群组/话题注册表
 
-    负责管理 Telegram 的已见群组和话题列表，用于在无法通过 API 获取群列表时提供回退支持。
+    负责管理 Telegram 的已见群组和话题列表，用于平台发现。
     数据存储在 AstrBot 的 KV 存储中。
     """
 

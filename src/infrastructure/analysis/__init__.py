@@ -1,8 +1,6 @@
 """
 分析模块
-包含LLM分析功能
+包含 LLM 分析器与结构化输出工具。
 """
 
-from .llm_analyzer import LLMAnalyzer
-
-__all__ = ["LLMAnalyzer"]
+__all__: list[str] = []

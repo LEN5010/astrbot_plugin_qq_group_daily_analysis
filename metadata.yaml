@@ -1,8 +1,8 @@
 name: astrbot_plugin_qq_group_daily_analysis
-display_name: 群聊日报与联合日报插件
-desc: "AstrBot 群聊分析插件，支持单群日报、增量分析与跨群联合日报聚合"
-version: v4.9.15
-author: your-name
+display_name: 增量跨群联合日报插件
+desc: "AstrBot 增量跨群联合日报插件，仅保留源群增量分析与跨群聚合日报链路"
+version: v5.0.0
+author: LEN5010
 astrbot_version: ">=4.16.0"
 support_platforms: 
   - aiocqhttp

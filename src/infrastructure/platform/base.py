@@ -97,7 +97,7 @@ class PlatformAdapter(
         """
         将平台无关的统一消息列表转换回当前平台的原生字典格式。
 
-        此方法主要用于向后兼容，使新的统一接口能与依赖原生数据结构的旧版分析逻辑协同工作。
+        此方法用于将统一消息交给增量分析器使用。
 
         Args:
             messages (list[UnifiedMessage]): 待转换的统一消息列表
@@ -119,7 +119,7 @@ class PlatformAdapter(
         if not nodes:
             return True
 
-        # 万能回退：将节点重新组合成易读的长文本
+        # 默认实现：将节点重新组合成易读的长文本
         lines = []
         for node in nodes:
             data = node.get("data", node)
@@ -169,43 +169,3 @@ class PlatformAdapter(
             bool: 平台是否支持并成功执行
         """
         return False
-
-    async def send_text_report(self, group_id: str, content: str) -> bool:
-        """
-        以最适合当前平台的方式发送长文本报告。
-        默认逻辑：将长文本切分为多个节点，然后调用 send_forward_msg。
-        各平台适配器通过实现 send_forward_msg 来决定最终呈现形式（合并转发、分段发送等）。
-        """
-        import re
-
-        try:
-            # 1. 准备节点基础信息
-            self_id = self.bot_self_ids[0] if self.bot_self_ids else "bot"
-            self_name = "分析报告"
-            # 2. 切分文本为逻辑段落（按标题、空行切分）
-            raw_content = str(content)
-            sections = re.split(r"\n+(?=[🎯📊💬🏆])|\n{2,}", raw_content.strip())
-            nodes = []
-
-            for sec in sections:
-                if not sec.strip():
-                    continue
-                nodes.append(
-                    {
-                        "type": "node",
-                        "data": {
-                            "name": self_name,
-                            "uin": self_id,
-                            "content": sec.strip(),
-                        },
-                    }
-                )
-
-            if not nodes:
-                return await self.send_text(group_id, raw_content)
-
-            # 3. 尝试发送转发消息/长消息链
-            return await self.send_forward_msg(group_id, nodes)
-        except Exception:
-            # 兜底：直接发送
-            return await self.send_text(group_id, str(content))

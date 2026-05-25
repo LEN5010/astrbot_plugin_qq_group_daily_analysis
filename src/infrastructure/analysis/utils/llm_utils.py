@@ -12,24 +12,6 @@ from .structured_output_schema import JSONObject
 _circuit_breakers = {}
 
 
-def _is_response_format_unsupported_error(error: Exception) -> bool:
-    """
-    判断是否为 Provider/网关不支持 response_format 的兼容性错误。
-    """
-    text = str(error).lower()
-    patterns = [
-        "response_format",
-        "json_schema",
-        "unexpected keyword argument",
-        "extra fields not permitted",
-        "unknown field",
-        "not support",
-        "not supported",
-        "invalid request",
-    ]
-    return any(pattern in text for pattern in patterns)
-
-
 def _get_circuit_breaker(provider_id: str) -> CircuitBreaker:
     if provider_id not in _circuit_breakers:
         _circuit_breakers[provider_id] = CircuitBreaker(name=f"provider_{provider_id}")
@@ -114,20 +96,20 @@ async def _try_get_first_available_provider_id(context) -> str | None:
     return None
 
 
-async def get_provider_id_with_fallback(
+async def get_provider_id_for_task(
     context,
     config_manager,
     provider_id_key: str | None,
     umo: str | None = None,
 ) -> str | None:
     """
-    根据配置键获取 Provider ID，支持多级回退
+    根据配置键获取 Provider ID，按明确顺序选择可用 Provider。
 
-    回退顺序：
+    选择顺序：
     1. 尝试从配置获取指定的 provider_id（如 topic_provider_id）
-    2. 回退到主 LLM provider_id（llm_provider_id）
-    3. 回退到当前会话的 Provider（通过 umo）
-    4. 回退到第一个可用的 Provider
+    2. 使用主 LLM provider_id（llm_provider_id）
+    3. 使用当前会话的 Provider（通过 umo）
+    4. 使用第一个可用的 Provider
 
     Args:
         context: AstrBot上下文对象
@@ -143,7 +125,6 @@ async def get_provider_id_with_fallback(
         task_desc = provider_id_key if provider_id_key else "默认任务"
         logger.info(f"[Provider 选择] 开始为 {task_desc} 选择 Provider...")
 
-        # 定义回退策略列表
         strategies = []
         strategy_names = []
 
@@ -178,8 +159,7 @@ async def get_provider_id_with_fallback(
         strategies.append(lambda: _try_get_first_available_provider_id(context))
         strategy_names.append("4. 第一个可用 Provider")
 
-        # 输出回退策略列表
-        logger.info(f"[Provider 选择] 回退策略顺序：{' -> '.join(strategy_names)}")
+        logger.info(f"[Provider 选择] 顺序：{' -> '.join(strategy_names)}")
 
         # 依次尝试每个策略
         for idx, strategy in enumerate(strategies):
@@ -190,7 +170,7 @@ async def get_provider_id_with_fallback(
                 )
                 return provider_id
 
-        logger.error("[Provider 选择] ✗ 失败：所有回退策略均无法获取可用 Provider")
+        logger.error("[Provider 选择] ✗ 失败：所有选择项均无法获取可用 Provider")
         return None
 
     except Exception as e:
@@ -233,7 +213,7 @@ async def call_provider_with_retry(
     for attempt in range(1, retries + 1):
         try:
             # 使用新的 provider 选择逻辑，获取 Provider ID
-            provider_id = await get_provider_id_with_fallback(
+            provider_id = await get_provider_id_for_task(
                 context, config_manager, provider_id_key, umo
             )
 
@@ -285,25 +265,7 @@ async def call_provider_with_retry(
                     if extra_generate_kwargs:
                         llm_kwargs.update(extra_generate_kwargs)
 
-                    try:
-                        llm_resp = await context.llm_generate(
-                            **llm_kwargs,
-                        )
-                    except Exception as e:
-                        if (
-                            response_format is not None
-                            and _is_response_format_unsupported_error(e)
-                        ):
-                            logger.warning(
-                                "[LLM 调用] 当前 Provider 可能不支持 response_format，"
-                                "已自动降级为无 schema 约束重试本次请求。"
-                            )
-                            llm_kwargs.pop("response_format", None)
-                            llm_resp = await context.llm_generate(
-                                **llm_kwargs,
-                            )
-                        else:
-                            raise
+                    llm_resp = await context.llm_generate(**llm_kwargs)
 
                 # 成功记录
                 cb.record_success()
@@ -324,7 +286,7 @@ async def call_provider_with_retry(
         if attempt < retries:
             await asyncio.sleep(backoff * attempt)
 
-    # 最终仍失败，记录错误并返回 None 由调用方处理降级，避免抛出异常
+    # 最终仍失败，返回 None；上层会将当前分析任务判为失败。
     logger.error(f"LLM请求全部重试失败: {last_exc}")
     return None
 
