@@ -269,11 +269,10 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(
                 completion_text=json.dumps(
                     {
-                        "quote_comments": [{"index": 1, "comment": "这一句够锋利。"}],
-                        "topic_comments": [
-                            {"index": i, "comment": f"话题{i}点评"}
-                            for i in range(1, 7)
-                        ],
+                        "quote_comments": {"q1": "这一句够锋利。"},
+                        "topic_comments": {
+                            f"t{i}": f"话题{i}点评" for i in range(1, 7)
+                        },
                     },
                     ensure_ascii=False,
                 ),
@@ -306,6 +305,8 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(persona_prompt)
         self.assertNotIn("未入选金句", persona_prompt)
         self.assertNotIn("话题7", persona_prompt)
+        self.assertIn("键集合必须严格等于：q1", persona_prompt)
+        self.assertIn("键集合必须严格等于：t1, t2, t3, t4, t5, t6", persona_prompt)
 
     async def test_union_quotes_are_selected_by_quote_id_not_rewritten_text(self):
         date = "2026-05-26"
@@ -344,8 +345,8 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(
                 completion_text=json.dumps(
                     {
-                        "quote_comments": [{"index": 1, "comment": "够有代表性。"}],
-                        "topic_comments": [{"index": 1, "comment": "这个话题很集中。"}],
+                        "quote_comments": {"q1": "够有代表性。"},
+                        "topic_comments": {"t1": "这个话题很集中。"},
                     },
                     ensure_ascii=False,
                 ),
@@ -409,8 +410,8 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(
                 completion_text=json.dumps(
                     {
-                        "quote_comments": [{"index": 1, "comment": "点评金句。"}],
-                        "topic_comments": [{"index": 1, "comment": "点评话题。"}],
+                        "quote_comments": {"q1": "点评金句。"},
+                        "topic_comments": {"t1": "点评话题。"},
                     },
                     ensure_ascii=False,
                 ),
@@ -423,7 +424,7 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
         async def fake_call(*args, **kwargs):
             nonlocal captured_prompt
             prompt = kwargs.get("prompt", "")
-            if "最终输出合同" in prompt:
+            if "不允许返回 content、sender、group_ref" in prompt:
                 captured_prompt = prompt
             return responses.pop(0)
 
@@ -438,6 +439,63 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("优先级高于上方所有提示词", captured_prompt)
         self.assertIn("不允许返回 content、sender、group_ref", captured_prompt)
         self.assertEqual(report.top_quotes[0].content, "原始金句")
+
+    async def test_persona_comments_reject_legacy_index_array(self):
+        date = "2026-05-26"
+        group_ref = "qq:GroupMessage:100"
+        service = UnionDailyReportService(
+            FakeConfig(),
+            FakeHistory(
+                {
+                    (group_ref, date): self._analysis_result(
+                        group_ref,
+                        quotes=[
+                            {"content": "原始金句", "sender": "甲", "reason": "原始理由"}
+                        ],
+                        topics=[
+                            {"topic": "话题1", "detail": "详情1", "contributors": ["甲"]}
+                        ],
+                    )
+                }
+            ),
+            SimpleNamespace(),
+        )
+        responses = [
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "top_quotes": [{"quote_id": 1, "reason": "编号理由"}],
+                        "global_commentary": "整体活跃。",
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "quote_comments": [{"index": 1, "comment": "旧格式点评。"}],
+                        "topic_comments": [{"index": 1, "comment": "旧格式话题。"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+        ]
+
+        original_call = union_module.call_provider_with_retry
+
+        async def fake_call(*args, **kwargs):
+            return responses.pop(0)
+
+        union_module.call_provider_with_retry = fake_call
+        try:
+            report = await service.build_union_report([group_ref], date)
+        finally:
+            union_module.call_provider_with_retry = original_call
+
+        self.assertIsNone(report)
+        self.assertEqual(service.last_failure_reason, "persona_comment_failed")
 
     async def test_invalid_union_llm_json_fails(self):
         date = "2026-05-26"

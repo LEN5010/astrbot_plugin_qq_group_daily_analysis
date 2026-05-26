@@ -629,15 +629,19 @@ ${topics_text}
             {item.group_ref for item in [*top_quotes, *topic_highlights] if item.group_ref}
         )
         for group_ref in group_refs:
+            group_quotes = [
+                quote for quote in top_quotes if quote.group_ref == group_ref
+            ]
+            group_topics = [
+                topic for topic in topic_highlights if topic.group_ref == group_ref
+            ]
             quote_items = [
-                (index, quote)
-                for index, quote in enumerate(top_quotes, 1)
-                if quote.group_ref == group_ref
+                (f"q{index}", quote)
+                for index, quote in enumerate(group_quotes, 1)
             ]
             topic_items = [
-                (index, topic)
-                for index, topic in enumerate(topic_highlights, 1)
-                if topic.group_ref == group_ref
+                (f"t{index}", topic)
+                for index, topic in enumerate(group_topics, 1)
             ]
             if not quote_items and not topic_items:
                 continue
@@ -653,7 +657,10 @@ ${topics_text}
                 system_prompt=system_prompt,
                 response_format=build_response_format(
                     "union_persona_comments",
-                    self._build_persona_comment_schema(),
+                    self._build_persona_comment_schema(
+                        [item_id for item_id, _ in quote_items],
+                        [item_id for item_id, _ in topic_items],
+                    ),
                 ),
             )
             if response is None:
@@ -694,99 +701,131 @@ ${topics_text}
 
     def _build_persona_comment_prompt(
         self,
-        quote_items: list[tuple[int, UnionQuote]],
-        topic_items: list[tuple[int, UnionTopic]],
+        quote_items: list[tuple[str, UnionQuote]],
+        topic_items: list[tuple[str, UnionTopic]],
     ) -> str:
         quote_lines = [
             (
-                f"{index}. 群：{quote.group_name}；发言人：{quote.sender}；"
+                f"{item_id}. 群：{quote.group_name}；发言人：{quote.sender}；"
                 f"金句：{quote.content}；入选理由：{quote.reason}"
             )
-            for index, quote in quote_items
+            for item_id, quote in quote_items
         ]
         topic_lines = [
             (
-                f"{index}. 群：{topic.group_name}；话题：{topic.topic}；"
+                f"{item_id}. 群：{topic.group_name}；话题：{topic.topic}；"
                 f"参与者：{'、'.join(topic.contributors[:4]) or '群友'}；详情：{topic.detail}"
             )
-            for index, topic in topic_items
+            for item_id, topic in topic_items
         ]
+        quote_ids = [item_id for item_id, _ in quote_items]
+        topic_ids = [item_id for item_id, _ in topic_items]
+        quote_ids_text = ", ".join(quote_ids) or "无"
+        topic_ids_text = ", ".join(topic_ids) or "无"
+        quote_example = (
+            ", ".join(f'"{item_id}": "一句点评"' for item_id in quote_ids)
+            if quote_ids
+            else ""
+        )
+        topic_example = (
+            ", ".join(f'"{item_id}": "一句点评"' for item_id in topic_ids)
+            if topic_ids
+            else ""
+        )
         return (
             "你要为跨群联合日报中最终展示的条目写一句人格点评。\n"
             "要求：\n"
             "- 只返回 JSON。\n"
-            "- 每个输入条目必须返回且只返回一句 comment。\n"
+            "- 每个输入条目必须返回且只返回一句点评文本。\n"
             "- comment 要体现你当前人格的观察角度，不要复述原文，不要超过 35 个汉字。\n"
             "- 不要编造输入中不存在的人名、群名或事实。\n\n"
             "金句条目：\n"
             f"{chr(10).join(quote_lines) or '无'}\n\n"
             "话题条目：\n"
             f"{chr(10).join(topic_lines) or '无'}\n\n"
-            "返回格式：\n"
+            "最终输出合同：\n"
+            f"- quote_comments 必须是对象，键集合必须严格等于：{quote_ids_text}。\n"
+            f"- topic_comments 必须是对象，键集合必须严格等于：{topic_ids_text}。\n"
+            "- 不允许返回数组，不允许返回 index，不允许新增或遗漏任何键。\n\n"
+            "返回格式示例：\n"
             "{\n"
-            '  "quote_comments": [{"index": 1, "comment": "一句点评"}],\n'
-            '  "topic_comments": [{"index": 1, "comment": "一句点评"}]\n'
+            f'  "quote_comments": {{{quote_example}}},\n'
+            f'  "topic_comments": {{{topic_example}}}\n'
             "}"
         )
 
-    def _build_persona_comment_schema(self) -> JSONObject:
-        comment_item = {
-            "type": "object",
-            "properties": {
-                "index": {"type": "integer"},
-                "comment": {"type": "string"},
-            },
-            "required": ["index", "comment"],
-            "additionalProperties": False,
-        }
+    def _build_persona_comment_schema(
+        self,
+        quote_ids: list[str],
+        topic_ids: list[str],
+    ) -> JSONObject:
         return {
             "type": "object",
             "properties": {
-                "quote_comments": {"type": "array", "items": comment_item},
-                "topic_comments": {"type": "array", "items": comment_item},
+                "quote_comments": self._build_comment_object_schema(quote_ids),
+                "topic_comments": self._build_comment_object_schema(topic_ids),
             },
             "required": ["quote_comments", "topic_comments"],
+            "additionalProperties": False,
+        }
+
+    @staticmethod
+    def _build_comment_object_schema(item_ids: list[str]) -> JSONObject:
+        return {
+            "type": "object",
+            "properties": {
+                item_id: {"type": "string"} for item_id in item_ids
+            },
+            "required": item_ids,
             "additionalProperties": False,
         }
 
     def _apply_persona_comments(
         self,
         parsed: dict[str, Any],
-        quote_items: list[tuple[int, UnionQuote]],
-        topic_items: list[tuple[int, UnionTopic]],
+        quote_items: list[tuple[str, UnionQuote]],
+        topic_items: list[tuple[str, UnionTopic]],
     ) -> bool:
-        quote_targets = {index: quote for index, quote in quote_items}
-        topic_targets = {index: topic for index, topic in topic_items}
-        quote_comments = self._extract_comment_map(parsed.get("quote_comments"))
-        topic_comments = self._extract_comment_map(parsed.get("topic_comments"))
+        quote_targets = {item_id: quote for item_id, quote in quote_items}
+        topic_targets = {item_id: topic for item_id, topic in topic_items}
+        quote_comments = self._extract_comment_object(
+            parsed.get("quote_comments"),
+            set(quote_targets),
+        )
+        topic_comments = self._extract_comment_object(
+            parsed.get("topic_comments"),
+            set(topic_targets),
+        )
 
-        if set(quote_comments) != set(quote_targets):
+        if quote_comments is None:
             return False
-        if set(topic_comments) != set(topic_targets):
+        if topic_comments is None:
             return False
 
-        for index, comment in quote_comments.items():
-            quote_targets[index].persona_comment = comment
-        for index, comment in topic_comments.items():
-            topic_targets[index].persona_comment = comment
+        for item_id, comment in quote_comments.items():
+            quote_targets[item_id].persona_comment = comment
+        for item_id, comment in topic_comments.items():
+            topic_targets[item_id].persona_comment = comment
         return True
 
     @staticmethod
-    def _extract_comment_map(raw_items: Any) -> dict[int, str]:
-        if not isinstance(raw_items, list):
-            return {}
+    def _extract_comment_object(
+        raw_comments: Any,
+        required_ids: set[str],
+    ) -> dict[str, str] | None:
+        if not isinstance(raw_comments, dict):
+            return None
+        if set(raw_comments) != required_ids:
+            return None
 
-        comments: dict[int, str] = {}
-        for item in raw_items:
-            if not isinstance(item, dict):
-                continue
-            try:
-                index = int(item.get("index"))
-            except (TypeError, ValueError):
-                continue
-            comment = str(item.get("comment", "")).strip()
-            if index > 0 and comment:
-                comments[index] = comment
+        comments: dict[str, str] = {}
+        for item_id, raw_comment in raw_comments.items():
+            if not isinstance(raw_comment, str):
+                return None
+            comment = raw_comment.strip()
+            if not comment:
+                return None
+            comments[item_id] = comment
         return comments
 
     async def _build_persona_system_prompt(self, group_ref: str) -> str | None:
