@@ -100,6 +100,9 @@ class UnionDailyReport:
 class UnionDailyReportService:
     """跨群聚合日报服务。"""
 
+    _PERSONA_COMMENT_MIN_LENGTH = 10
+    _PERSONA_COMMENT_MAX_LENGTH = 30
+
     _DEFAULT_PROMPT = """
 你正在为“A海岸”生成一份联合日报。
 
@@ -723,21 +726,23 @@ ${topics_text}
         quote_ids_text = ", ".join(quote_ids) or "无"
         topic_ids_text = ", ".join(topic_ids) or "无"
         quote_example = (
-            ", ".join(f'"{item_id}": "一句点评"' for item_id in quote_ids)
+            ", ".join(f'"{item_id}": "这波发言多少有点抽象"' for item_id in quote_ids)
             if quote_ids
             else ""
         )
         topic_example = (
-            ", ".join(f'"{item_id}": "一句点评"' for item_id in topic_ids)
+            ", ".join(f'"{item_id}": "这话题越聊越像整活现场"' for item_id in topic_ids)
             if topic_ids
             else ""
         )
         return (
-            "你要为跨群联合日报中最终展示的条目写一句人格点评。\n"
+            "你要为跨群联合日报中最终展示的条目写一小段人格点评。\n"
             "要求：\n"
             "- 只返回 JSON。\n"
-            "- 每个输入条目必须返回且只返回一句点评文本。\n"
-            "- comment 要体现你当前人格的观察角度，不要复述原文，不要超过 35 个汉字。\n"
+            "- 每个输入条目必须返回且只返回一小段点评文本。\n"
+            "- 每段点评必须是 10 到 30 个中文字符。\n"
+            "- 语言要更嘲讽、搞耍一点，像爱驼在旁边顺手吐槽。\n"
+            "- 点评要体现你当前人格的观察角度，不要复述原文。\n"
             "- 不要编造输入中不存在的人名、群名或事实。\n\n"
             "金句条目：\n"
             f"{chr(10).join(quote_lines) or '无'}\n\n"
@@ -774,7 +779,12 @@ ${topics_text}
         return {
             "type": "object",
             "properties": {
-                item_id: {"type": "string"} for item_id in item_ids
+                item_id: {
+                    "type": "string",
+                    "minLength": UnionDailyReportService._PERSONA_COMMENT_MIN_LENGTH,
+                    "maxLength": UnionDailyReportService._PERSONA_COMMENT_MAX_LENGTH,
+                }
+                for item_id in item_ids
             },
             "required": item_ids,
             "additionalProperties": False,
@@ -823,7 +833,11 @@ ${topics_text}
             if not isinstance(raw_comment, str):
                 return None
             comment = raw_comment.strip()
-            if not comment:
+            if not (
+                UnionDailyReportService._PERSONA_COMMENT_MIN_LENGTH
+                <= len(comment)
+                <= UnionDailyReportService._PERSONA_COMMENT_MAX_LENGTH
+            ):
                 return None
             comments[item_id] = comment
         return comments

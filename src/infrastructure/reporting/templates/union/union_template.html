@@ -255,6 +255,11 @@
             font-weight: 700;
         }
 
+        .persona-label {
+            margin-right: 4px;
+            color: #7a2f47;
+        }
+
         .footer {
             margin-top: 28px;
             padding-top: 18px;
@@ -386,7 +391,7 @@
                             <div>{{ quote.reason }}</div>
                         </div>
                         {% if quote.persona_comment %}
-                        <div class="persona-comment">{{ quote.persona_comment }}</div>
+                        <div class="persona-comment"><span class="persona-label">爱驼点评:</span>{{ quote.persona_comment }}</div>
                         {% endif %}
                     </article>
                     {% endfor %}
@@ -434,7 +439,7 @@
                         </div>
                         <p class="topic-detail">{{ topic.detail | render_union_markdown }}</p>
                         {% if topic.persona_comment %}
-                        <div class="persona-comment">{{ topic.persona_comment }}</div>
+                        <div class="persona-comment"><span class="persona-label">爱驼点评:</span>{{ topic.persona_comment }}</div>
                         {% endif %}
                     </article>
                     {% endfor %}

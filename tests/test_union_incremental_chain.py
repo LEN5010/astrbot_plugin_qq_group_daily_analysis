@@ -282,9 +282,9 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(
                 completion_text=json.dumps(
                     {
-                        "quote_comments": {"q1": "这一句够锋利。"},
+                        "quote_comments": {"q1": "这句够锋利还挺会整活"},
                         "topic_comments": {
-                            f"t{i}": f"话题{i}点评" for i in range(1, 7)
+                            f"t{i}": f"话题{i}这波越聊越抽象" for i in range(1, 7)
                         },
                     },
                     ensure_ascii=False,
@@ -312,7 +312,7 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.top_quotes), 1)
         self.assertEqual(report.top_quotes[0].content, "入选金句")
         self.assertEqual(report.top_quotes[0].reason, "联合日报入选理由")
-        self.assertEqual(report.top_quotes[0].persona_comment, "这一句够锋利。")
+        self.assertEqual(report.top_quotes[0].persona_comment, "这句够锋利还挺会整活")
         self.assertEqual(len(report.topic_highlights), 6)
         self.assertTrue(all(item.persona_comment for item in report.topic_highlights))
         self.assertIsNotNone(persona_prompt)
@@ -320,6 +320,8 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("话题7", persona_prompt)
         self.assertIn("键集合必须严格等于：q1", persona_prompt)
         self.assertIn("键集合必须严格等于：t1, t2, t3, t4, t5, t6", persona_prompt)
+        self.assertIn("10 到 30 个中文字符", persona_prompt)
+        self.assertIn("嘲讽、搞耍", persona_prompt)
 
     async def test_union_quotes_are_selected_by_quote_id_not_rewritten_text(self):
         date = "2026-05-26"
@@ -358,8 +360,8 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(
                 completion_text=json.dumps(
                     {
-                        "quote_comments": {"q1": "够有代表性。"},
-                        "topic_comments": {"t1": "这个话题很集中。"},
+                        "quote_comments": {"q1": "够有代表性但也挺能整"},
+                        "topic_comments": {"t1": "这个话题集中得有点好笑"},
                     },
                     ensure_ascii=False,
                 ),
@@ -423,8 +425,8 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(
                 completion_text=json.dumps(
                     {
-                        "quote_comments": {"q1": "点评金句。"},
-                        "topic_comments": {"t1": "点评话题。"},
+                        "quote_comments": {"q1": "这句金句多少有点离谱"},
+                        "topic_comments": {"t1": "这个话题越聊越像整活"},
                     },
                     ensure_ascii=False,
                 ),
@@ -682,6 +684,18 @@ class OneBotAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message[0], {"type": "text", "data": {"text": "日报"}})
         self.assertTrue(message[1]["data"]["file"].startswith("base64://"))
         self.assertNotIn("file://", message[1]["data"]["file"])
+
+
+class TemplateStaticTests(unittest.TestCase):
+    def test_persona_comment_label_is_aituo(self):
+        template_path = (
+            Path(__file__).resolve().parents[1]
+            / "src/infrastructure/reporting/templates/union/union_template.html"
+        )
+        html = template_path.read_text(encoding="utf-8")
+
+        self.assertIn("爱驼点评:", html)
+        self.assertIn("persona-label", html)
 
 
 if __name__ == "__main__":
