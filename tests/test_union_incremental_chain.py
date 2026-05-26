@@ -401,6 +401,39 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("最终输出合同", captured_prompt)
         self.assertIn("键集合必须严格等于：q1", captured_prompt)
 
+    async def test_persona_comment_contract_omits_empty_sections(self):
+        service = UnionDailyReportService(
+            FakeConfig(),
+            FakeHistory({}),
+            SimpleNamespace(),
+        )
+        topic = union_module.UnionTopic(
+            group_ref="qq:GroupMessage:100",
+            platform_id="qq",
+            group_id="100",
+            group_name="源群",
+            topic="话题1",
+            detail="详情1",
+            contributors=["甲"],
+        )
+
+        prompt = service._build_persona_comment_prompt([], [("t1", topic)])
+        schema = service._build_persona_comment_schema([], ["t1"])
+
+        self.assertIn("当前没有金句条目，不要返回 quote_comments", prompt)
+        self.assertIn("topic_comments 必须是对象，键集合必须严格等于：t1", prompt)
+        self.assertNotIn("quote_comments", schema["properties"])
+        self.assertEqual(schema["required"], ["topic_comments"])
+
+        ok = service._apply_persona_comments(
+            {"topic_comments": {"t1": "这个话题越聊越像整活"}},
+            [],
+            [("t1", topic)],
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(topic.persona_comment, "这个话题越聊越像整活")
+
     async def test_union_quotes_are_selected_by_quote_id_not_rewritten_text(self):
         date = "2026-05-26"
         group_ref = "qq:GroupMessage:100"

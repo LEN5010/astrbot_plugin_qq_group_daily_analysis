@@ -741,8 +741,6 @@ ${topics_text}
         ]
         quote_ids = [item_id for item_id, _ in quote_items]
         topic_ids = [item_id for item_id, _ in topic_items]
-        quote_ids_text = ", ".join(quote_ids) or "无"
-        topic_ids_text = ", ".join(topic_ids) or "无"
         quote_example = (
             ", ".join(f'"{item_id}": "这波发言多少有点抽象"' for item_id in quote_ids)
             if quote_ids
@@ -763,18 +761,34 @@ ${topics_text}
             comment_max_length=self._PERSONA_COMMENT_MAX_LENGTH,
             quote_items_text=chr(10).join(quote_lines) or "无",
             topic_items_text=chr(10).join(topic_lines) or "无",
-            quote_ids_text=quote_ids_text,
-            topic_ids_text=topic_ids_text,
+            quote_ids_text=", ".join(quote_ids) or "无",
+            topic_ids_text=", ".join(topic_ids) or "无",
         )
+        contract_lines = []
+        example_lines = []
+        if quote_ids:
+            contract_lines.append(
+                f"- quote_comments 必须是对象，键集合必须严格等于：{', '.join(quote_ids)}。"
+            )
+            example_lines.append(f'  "quote_comments": {{{quote_example}}}')
+        else:
+            contract_lines.append("- 当前没有金句条目，不要返回 quote_comments。")
+
+        if topic_ids:
+            contract_lines.append(
+                f"- topic_comments 必须是对象，键集合必须严格等于：{', '.join(topic_ids)}。"
+            )
+            example_lines.append(f'  "topic_comments": {{{topic_example}}}')
+        else:
+            contract_lines.append("- 当前没有话题条目，不要返回 topic_comments。")
+
         final_contract = (
             "最终输出合同：\n"
-            f"- quote_comments 必须是对象，键集合必须严格等于：{quote_ids_text}。\n"
-            f"- topic_comments 必须是对象，键集合必须严格等于：{topic_ids_text}。\n"
+            f"{chr(10).join(contract_lines)}\n"
             "- 不允许返回数组，不允许返回 index，不允许新增或遗漏任何键。\n\n"
             "返回格式示例：\n"
             "{\n"
-            f'  "quote_comments": {{{quote_example}}},\n'
-            f'  "topic_comments": {{{topic_example}}}\n'
+            f"{(',' + chr(10)).join(example_lines)}\n"
             "}"
         )
         return f"{rendered_prompt}\n\n{final_contract}"
@@ -784,13 +798,19 @@ ${topics_text}
         quote_ids: list[str],
         topic_ids: list[str],
     ) -> JSONObject:
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        if quote_ids:
+            properties["quote_comments"] = self._build_comment_object_schema(quote_ids)
+            required.append("quote_comments")
+        if topic_ids:
+            properties["topic_comments"] = self._build_comment_object_schema(topic_ids)
+            required.append("topic_comments")
+
         return {
             "type": "object",
-            "properties": {
-                "quote_comments": self._build_comment_object_schema(quote_ids),
-                "topic_comments": self._build_comment_object_schema(topic_ids),
-            },
-            "required": ["quote_comments", "topic_comments"],
+            "properties": properties,
+            "required": required,
             "additionalProperties": False,
         }
 
@@ -818,13 +838,37 @@ ${topics_text}
     ) -> bool:
         quote_targets = {item_id: quote for item_id, quote in quote_items}
         topic_targets = {item_id: topic for item_id, topic in topic_items}
-        quote_comments = self._extract_comment_object(
-            parsed.get("quote_comments"),
-            set(quote_targets),
+        expected_sections = set()
+        if quote_targets:
+            expected_sections.add("quote_comments")
+        if topic_targets:
+            expected_sections.add("topic_comments")
+
+        if set(parsed) != expected_sections:
+            logger.warning(
+                "人格点评顶层字段不匹配: expected=%s actual=%s",
+                sorted(expected_sections),
+                sorted(parsed),
+            )
+            return False
+
+        quote_comments = (
+            self._extract_comment_object(
+                parsed.get("quote_comments"),
+                set(quote_targets),
+                "quote_comments",
+            )
+            if quote_targets
+            else {}
         )
-        topic_comments = self._extract_comment_object(
-            parsed.get("topic_comments"),
-            set(topic_targets),
+        topic_comments = (
+            self._extract_comment_object(
+                parsed.get("topic_comments"),
+                set(topic_targets),
+                "topic_comments",
+            )
+            if topic_targets
+            else {}
         )
 
         if quote_comments is None:
@@ -842,15 +886,28 @@ ${topics_text}
     def _extract_comment_object(
         raw_comments: Any,
         required_ids: set[str],
+        section_name: str,
     ) -> dict[str, str] | None:
         if not isinstance(raw_comments, dict):
+            logger.warning("人格点评字段类型无效: section=%s", section_name)
             return None
         if set(raw_comments) != required_ids:
+            logger.warning(
+                "人格点评条目键不匹配: section=%s expected=%s actual=%s",
+                section_name,
+                sorted(required_ids),
+                sorted(raw_comments),
+            )
             return None
 
         comments: dict[str, str] = {}
         for item_id, raw_comment in raw_comments.items():
             if not isinstance(raw_comment, str):
+                logger.warning(
+                    "人格点评不是字符串: section=%s item_id=%s",
+                    section_name,
+                    item_id,
+                )
                 return None
             comment = raw_comment.strip()
             if not (
@@ -858,6 +915,13 @@ ${topics_text}
                 <= len(comment)
                 <= UnionDailyReportService._PERSONA_COMMENT_MAX_LENGTH
             ):
+                logger.warning(
+                    "人格点评长度不合规: section=%s item_id=%s length=%d text=%s",
+                    section_name,
+                    item_id,
+                    len(comment),
+                    comment,
+                )
                 return None
             comments[item_id] = comment
         return comments
