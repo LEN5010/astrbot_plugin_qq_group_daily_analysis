@@ -99,13 +99,18 @@ class FakeConfig:
         source_groups: list[str] | None = None,
         target_groups: list[str] | None = None,
         union_prompt: str = "",
+        persona_comment_prompt: str = "",
     ):
         self.source_groups = source_groups or []
         self.target_groups = target_groups or []
         self.union_prompt = union_prompt
+        self.persona_comment_prompt = persona_comment_prompt
 
     def get_union_daily_analysis_prompt(self) -> str:
         return self.union_prompt
+
+    def get_persona_comment_prompt(self) -> str:
+        return self.persona_comment_prompt
 
     def get_use_plugin_specific_persona(self) -> bool:
         return False
@@ -322,6 +327,79 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("键集合必须严格等于：t1, t2, t3, t4, t5, t6", persona_prompt)
         self.assertIn("10 到 30 个中文字符", persona_prompt)
         self.assertIn("嘲讽、搞耍", persona_prompt)
+
+    async def test_persona_comment_prompt_is_loaded_from_config(self):
+        date = "2026-05-26"
+        group_ref = "qq:GroupMessage:100"
+        custom_prompt = (
+            "自定义爱驼吐槽口径：保持阴阳怪气但别编事实。\n"
+            "金句输入：\n${quote_items_text}\n"
+            "话题输入：\n${topic_items_text}\n"
+            "长度：${comment_min_length}-${comment_max_length}"
+        )
+        service = UnionDailyReportService(
+            FakeConfig(persona_comment_prompt=custom_prompt),
+            FakeHistory(
+                {
+                    (group_ref, date): self._analysis_result(
+                        group_ref,
+                        quotes=[
+                            {"content": "原始金句", "sender": "甲", "reason": "原始理由"}
+                        ],
+                        topics=[
+                            {"topic": "话题1", "detail": "详情1", "contributors": ["甲"]}
+                        ],
+                    )
+                }
+            ),
+            SimpleNamespace(),
+        )
+
+        captured_prompt = ""
+        responses = [
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "top_quotes": [{"quote_id": 1, "reason": "编号理由"}],
+                        "global_commentary": "整体活跃。",
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "quote_comments": {"q1": "这句金句多少有点离谱"},
+                        "topic_comments": {"t1": "这个话题越聊越像整活"},
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+        ]
+
+        original_call = union_module.call_provider_with_retry
+
+        async def fake_call(*args, **kwargs):
+            nonlocal captured_prompt
+            prompt = kwargs.get("prompt", "")
+            if "自定义爱驼吐槽口径" in prompt:
+                captured_prompt = prompt
+            return responses.pop(0)
+
+        union_module.call_provider_with_retry = fake_call
+        try:
+            report = await service.build_union_report([group_ref], date)
+        finally:
+            union_module.call_provider_with_retry = original_call
+
+        self.assertIsNotNone(report)
+        self.assertIn("自定义爱驼吐槽口径", captured_prompt)
+        self.assertIn("q1. 群：源群；发言人：甲", captured_prompt)
+        self.assertIn("长度：10-30", captured_prompt)
+        self.assertIn("最终输出合同", captured_prompt)
+        self.assertIn("键集合必须严格等于：q1", captured_prompt)
 
     async def test_union_quotes_are_selected_by_quote_id_not_rewritten_text(self):
         date = "2026-05-26"

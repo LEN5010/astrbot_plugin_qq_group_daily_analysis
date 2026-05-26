@@ -14,7 +14,7 @@
 - 在联合日报发送前，将每个源群的增量批次合并为当天 JSON 中间结果
 - 严格等待所有源群 JSON 就绪后生成跨群联合日报
 - 从候选金句中选择 Top 3，并生成联合日报全局点评
-- 复用 AstrBot 人格，为最终展示的每条金句和话题生成一句点评
+- 复用 AstrBot 人格，为最终展示的每条金句和话题生成 10-30 字点评
 - 固定输出联合日报图片，主题色为 `#E799B0`
 
 ## 配置要点
@@ -45,6 +45,11 @@
 - `union_report.union_report_time`
 - `union_report.union_prepare_lead_minutes`
 - `union_report.union_wait_timeout_minutes`
+
+提示词：
+
+- `prompts.union_daily_report_prompts.union_daily_report_prompt`
+- `prompts.union_daily_report_prompts.persona_comment_prompt`
 
 `union_target_groups` 必填。为空时不会回退发送到源群。
 

@@ -200,6 +200,16 @@ class ConfigManager:
             return prompt
         return ""
 
+    def get_persona_comment_prompt(self, style: str = "persona_comment_prompt") -> str:
+        """获取联合日报人格点评提示词模板"""
+        prompts_config = self._get_group("prompts").get(
+            "union_daily_report_prompts", {}
+        )
+        prompt = prompts_config.get(style, "")
+        if prompt:
+            return prompt
+        return ""
+
     def get_max_concurrent_tasks(self) -> int:
         """获取自动分析最大并发群数"""
         return self._get_group("performance").get("max_concurrent_groups", 1)

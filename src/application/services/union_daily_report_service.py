@@ -103,6 +103,24 @@ class UnionDailyReportService:
     _PERSONA_COMMENT_MIN_LENGTH = 10
     _PERSONA_COMMENT_MAX_LENGTH = 30
 
+    _DEFAULT_PERSONA_COMMENT_PROMPT = """
+你要为跨群联合日报中最终展示的条目写一小段人格点评。
+
+要求：
+- 只返回 JSON。
+- 每个输入条目必须返回且只返回一小段点评文本。
+- 每段点评必须是 ${comment_min_length} 到 ${comment_max_length} 个中文字符。
+- 语言要更嘲讽、搞耍一点，像爱驼在旁边顺手吐槽。
+- 点评要体现你当前人格的观察角度，不要复述原文。
+- 不要编造输入中不存在的人名、群名或事实。
+
+金句条目：
+${quote_items_text}
+
+话题条目：
+${topic_items_text}
+""".strip()
+
     _DEFAULT_PROMPT = """
 你正在为“A海岸”生成一份联合日报。
 
@@ -735,19 +753,20 @@ ${topics_text}
             if topic_ids
             else ""
         )
-        return (
-            "你要为跨群联合日报中最终展示的条目写一小段人格点评。\n"
-            "要求：\n"
-            "- 只返回 JSON。\n"
-            "- 每个输入条目必须返回且只返回一小段点评文本。\n"
-            "- 每段点评必须是 10 到 30 个中文字符。\n"
-            "- 语言要更嘲讽、搞耍一点，像爱驼在旁边顺手吐槽。\n"
-            "- 点评要体现你当前人格的观察角度，不要复述原文。\n"
-            "- 不要编造输入中不存在的人名、群名或事实。\n\n"
-            "金句条目：\n"
-            f"{chr(10).join(quote_lines) or '无'}\n\n"
-            "话题条目：\n"
-            f"{chr(10).join(topic_lines) or '无'}\n\n"
+        prompt_template = self.config_manager.get_persona_comment_prompt()
+        if not prompt_template:
+            prompt_template = self._DEFAULT_PERSONA_COMMENT_PROMPT
+
+        rendered_prompt = render_template(
+            prompt_template,
+            comment_min_length=self._PERSONA_COMMENT_MIN_LENGTH,
+            comment_max_length=self._PERSONA_COMMENT_MAX_LENGTH,
+            quote_items_text=chr(10).join(quote_lines) or "无",
+            topic_items_text=chr(10).join(topic_lines) or "无",
+            quote_ids_text=quote_ids_text,
+            topic_ids_text=topic_ids_text,
+        )
+        final_contract = (
             "最终输出合同：\n"
             f"- quote_comments 必须是对象，键集合必须严格等于：{quote_ids_text}。\n"
             f"- topic_comments 必须是对象，键集合必须严格等于：{topic_ids_text}。\n"
@@ -758,6 +777,7 @@ ${topics_text}
             f'  "topic_comments": {{{topic_example}}}\n'
             "}"
         )
+        return f"{rendered_prompt}\n\n{final_contract}"
 
     def _build_persona_comment_schema(
         self,
