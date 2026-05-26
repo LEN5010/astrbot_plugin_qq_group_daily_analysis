@@ -496,59 +496,25 @@ class OneBotAdapter(PlatformAdapter):
             if caption:
                 base_message.append({"type": "text", "data": {"text": caption}})
 
-            # 默认策略：1) 优先尝试物理路径；2) 路径失败则尝试 Base64
-            file_str = image_path
-            if not image_path.startswith(("http://", "https://", "base64://")):
-                if os.path.isabs(image_path):
-                    # 如果是绝对路径且以 / 开头，只需加 file:// 即可构成 file:///
-                    if image_path.startswith("/"):
-                        file_str = f"file://{image_path}"
-                    else:
-                        file_str = f"file:///{image_path}"
-                else:
-                    # 如果是相对路径，转为绝对路径
-                    file_str = f"file:///{os.path.abspath(image_path)}"
+            if image_path.startswith(("http://", "https://", "base64://")):
+                file_str = image_path
+            else:
+                local_path = image_path.removeprefix("file://")
+                if not os.path.isabs(local_path):
+                    local_path = os.path.abspath(local_path)
+                file_str = await self._get_base64_from_file(local_path)
+                if not file_str:
+                    logger.error("OneBot 本地图片读取失败，无法发送: %s", local_path)
+                    return False
 
-            try:
-                message = list(base_message)
-                message.append({"type": "image", "data": {"file": file_str}})
-                await self.bot.call_action(
-                    "send_group_msg",
-                    group_id=int(group_id),
-                    message=message,
-                )
-                return True
-            except Exception as e:
-                # 如果是网络图片或 Base64 输入，路径备选策略无意义，直接失败
-                if image_path.startswith(("http://", "https://", "base64://")):
-                    raise e
-
-                error_str = str(e).lower()
-                is_potential_success = (
-                    "timeout" in error_str
-                    or "1200" in error_str
-                    or "网络错误" in error_str
-                )
-                # 关键修复：对疑似成功的超时错误，不做“立即 Base64 补发”。
-                # 直接抛到外层统一进入多轮观察，避免同一份报告短时间内连发。
-                if is_potential_success:
-                    raise e
-
-                logger.warning(f"路径发送图片失败 ({e})，尝试 Base64 图片模式...")
-                b64_str = await self._get_base64_from_file(image_path)
-                if not b64_str:
-                    logger.error(f"Base64 图片模式失败：无法读取图片文件 {image_path}")
-                    raise e
-
-                message = list(base_message)
-                message.append({"type": "image", "data": {"file": b64_str}})
-                await self.bot.call_action(
-                    "send_group_msg",
-                    group_id=int(group_id),
-                    message=message,
-                )
-                logger.info(f"Base64 图片模式发送图片成功: 群 {group_id}")
-                return True
+            message = list(base_message)
+            message.append({"type": "image", "data": {"file": file_str}})
+            await self.bot.call_action(
+                "send_group_msg",
+                group_id=int(group_id),
+                message=message,
+            )
+            return True
 
         except Exception as e:
             logger.error(f"OneBot 图片发送最终失败: {e}")

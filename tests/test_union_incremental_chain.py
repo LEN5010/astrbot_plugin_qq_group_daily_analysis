@@ -67,6 +67,18 @@ def _install_runtime_stubs() -> None:
         markupsafe_module.Markup = Markup
         sys.modules["markupsafe"] = markupsafe_module
 
+    if "aiohttp" not in sys.modules:
+        aiohttp_module = types.ModuleType("aiohttp")
+
+        class ClientTimeout:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+        aiohttp_module.ClientTimeout = ClientTimeout
+        aiohttp_module.ClientSession = object
+        sys.modules["aiohttp"] = aiohttp_module
+
 
 _install_runtime_stubs()
 
@@ -75,6 +87,7 @@ from src.application.services.union_daily_report_service import UnionDailyReport
 from src.infrastructure.analysis.analyzers import base_analyzer as base_analyzer_module
 from src.infrastructure.analysis.analyzers.base_analyzer import LLMResponseParseError
 from src.infrastructure.analysis.analyzers.topic_analyzer import TopicAnalyzer
+from src.infrastructure.platform.adapters.onebot_adapter import OneBotAdapter
 from src.infrastructure.persistence.history_repository import HistoryRepository
 from src.infrastructure.scheduler.auto_scheduler import AutoScheduler
 
@@ -639,6 +652,36 @@ class SchedulerChainTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["success"], False)
         self.assertEqual(result["reason"], "dispatch_failed")
+
+
+class OneBotAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_local_image_is_sent_as_base64_not_file_path(self):
+        class FakeOneBot:
+            def __init__(self):
+                self.calls = []
+
+            async def call_action(self, action, **kwargs):
+                self.calls.append((action, kwargs))
+                return {"status": "ok"}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "union.png"
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\nfake-image")
+
+            bot = FakeOneBot()
+            adapter = OneBotAdapter(bot, {})
+
+            ok = await adapter.send_image("123456", str(image_path), "日报")
+
+        self.assertTrue(ok)
+        self.assertEqual(len(bot.calls), 1)
+        action, kwargs = bot.calls[0]
+        self.assertEqual(action, "send_group_msg")
+        self.assertEqual(kwargs["group_id"], 123456)
+        message = kwargs["message"]
+        self.assertEqual(message[0], {"type": "text", "data": {"text": "日报"}})
+        self.assertTrue(message[1]["data"]["file"].startswith("base64://"))
+        self.assertNotIn("file://", message[1]["data"]["file"])
 
 
 if __name__ == "__main__":
