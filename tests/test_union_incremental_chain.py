@@ -85,12 +85,14 @@ class FakeConfig:
         *,
         source_groups: list[str] | None = None,
         target_groups: list[str] | None = None,
+        union_prompt: str = "",
     ):
         self.source_groups = source_groups or []
         self.target_groups = target_groups or []
+        self.union_prompt = union_prompt
 
     def get_union_daily_analysis_prompt(self) -> str:
-        return ""
+        return self.union_prompt
 
     def get_use_plugin_specific_persona(self) -> bool:
         return False
@@ -366,6 +368,76 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.top_quotes[0].content, "原始金句")
         self.assertEqual(report.top_quotes[0].sender, "甲")
         self.assertEqual(report.top_quotes[0].reason, "编号选中的理由")
+
+    async def test_final_quote_id_contract_overrides_stale_config_prompt(self):
+        date = "2026-05-26"
+        group_ref = "qq:GroupMessage:100"
+        stale_prompt = (
+            "旧格式要求：top_quotes 返回 content、sender、group_ref、reason。\n"
+            "${groups_summary_text}\n${quotes_text}\n${topics_text}"
+        )
+        service = UnionDailyReportService(
+            FakeConfig(union_prompt=stale_prompt),
+            FakeHistory(
+                {
+                    (group_ref, date): self._analysis_result(
+                        group_ref,
+                        quotes=[
+                            {"content": "原始金句", "sender": "甲", "reason": "原始理由"}
+                        ],
+                        topics=[
+                            {"topic": "话题1", "detail": "详情1", "contributors": ["甲"]}
+                        ],
+                    )
+                }
+            ),
+            SimpleNamespace(),
+        )
+
+        captured_prompt = ""
+        responses = [
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "top_quotes": [{"quote_id": 1, "reason": "编号理由"}],
+                        "global_commentary": "整体活跃。",
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "quote_comments": [{"index": 1, "comment": "点评金句。"}],
+                        "topic_comments": [{"index": 1, "comment": "点评话题。"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+        ]
+
+        original_call = union_module.call_provider_with_retry
+
+        async def fake_call(*args, **kwargs):
+            nonlocal captured_prompt
+            prompt = kwargs.get("prompt", "")
+            if "最终输出合同" in prompt:
+                captured_prompt = prompt
+            return responses.pop(0)
+
+        union_module.call_provider_with_retry = fake_call
+        try:
+            report = await service.build_union_report([group_ref], date)
+        finally:
+            union_module.call_provider_with_retry = original_call
+
+        self.assertIsNotNone(report)
+        self.assertIn("最终输出合同", captured_prompt)
+        self.assertIn("优先级高于上方所有提示词", captured_prompt)
+        self.assertIn("不允许返回 content、sender、group_ref", captured_prompt)
+        self.assertEqual(report.top_quotes[0].content, "原始金句")
 
     async def test_invalid_union_llm_json_fails(self):
         date = "2026-05-26"

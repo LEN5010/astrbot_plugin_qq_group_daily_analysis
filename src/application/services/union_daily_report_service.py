@@ -573,7 +573,7 @@ ${topics_text}
             provider_id_key="union_report_provider_id",
             response_format=build_response_format(
                 "union_daily_report",
-                self._build_union_report_schema(),
+                self._build_union_report_schema(len(quote_candidates)),
             ),
         )
 
@@ -597,7 +597,11 @@ ${topics_text}
             return None
         top_quotes = self._map_llm_quotes(raw_top_quotes, quote_candidates)
         if quote_candidates and not top_quotes:
-            logger.warning("跨群聚合日报 Top 金句无法映射到候选编号")
+            logger.warning(
+                "跨群聚合日报 Top 金句无法映射到候选编号: candidate_count=%d raw_top_quotes=%s",
+                len(quote_candidates),
+                raw_top_quotes,
+            )
             self.last_failure_reason = "union_llm_failed"
             return None
 
@@ -914,15 +918,29 @@ ${topics_text}
             quotes_text=quotes_text or "无可用金句",
             topics_text=topics_text or "无可用话题",
         )
-        fairness_guard = (
-            "\n\n额外约束：候选金句每行都有 quote_id。"
-            "top_quotes 必须只引用这些 quote_id，不要改写金句原文、发言人或群名；"
+        quote_id_max = len(quote_candidates)
+        final_contract = (
+            "\n\n【最终输出合同 - 优先级高于上方所有提示词】\n"
+            "候选金句每行都有 quote_id。"
+            f"当前合法 quote_id 范围是 1 到 {quote_id_max}。"
+            "如果没有候选金句，top_quotes 必须返回空数组。\n"
+            "top_quotes 的每个元素只能包含 quote_id 和 reason 两个字段；"
+            "不允许返回 content、sender、group_ref、group_name 或其它字段。\n"
+            "quote_id 必须是数字，必须来自候选金句列表，不能自造编号。\n"
             "请尽量保证金句覆盖不同群。若多个候选质量接近，优先每个群最多入选 1 条；"
-            "只有明显优势时才允许同群重复入选。"
+            "只有明显优势时才允许同群重复入选。\n"
+            "最终只返回以下 JSON 结构：\n"
+            "{\n"
+            '  "top_quotes": [{"quote_id": 1, "reason": "入选理由"}],\n'
+            '  "global_commentary": "约 200 字的全局点评"\n'
+            "}"
         )
-        return f"{rendered_prompt}{fairness_guard}"
+        return f"{rendered_prompt}{final_contract}"
 
-    def _build_union_report_schema(self) -> JSONObject:
+    def _build_union_report_schema(self, quote_candidates_count: int) -> JSONObject:
+        quote_id_schema: JSONObject = {"type": "integer", "minimum": 1}
+        if quote_candidates_count > 0:
+            quote_id_schema["maximum"] = quote_candidates_count
         return {
             "type": "object",
             "properties": {
@@ -932,7 +950,7 @@ ${topics_text}
                     "items": {
                         "type": "object",
                         "properties": {
-                            "quote_id": {"type": "integer"},
+                            "quote_id": quote_id_schema,
                             "reason": {"type": "string"},
                         },
                         "required": ["quote_id", "reason"],
