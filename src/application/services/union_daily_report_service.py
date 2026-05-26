@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import re
 from typing import Any
@@ -111,7 +111,8 @@ class UnionDailyReportService:
 - 只返回 JSON。
 - `top_quotes` 必须是 3 条以内。
 - 在质量接近时，优先让 Top 3 覆盖不同群，避免同一个群重复霸榜。
-- 不要编造未出现在输入中的群号、金句原文或发言人。
+- top_quotes 只允许返回候选金句中的 quote_id 和一句入选理由。
+- 不要编造未出现在输入中的候选编号、群号、金句原文或发言人。
 - 点评要有整体感，既要提到最活跃群，也要概括 A海岸整体共性与差异。
 
 统计概览：
@@ -122,12 +123,21 @@ ${quotes_text}
 
 候选话题：
 ${topics_text}
+
+返回格式：
+{
+  "top_quotes": [
+    {"quote_id": 1, "reason": "入选理由"}
+  ],
+  "global_commentary": "约 200 字的全局点评"
+}
 """
 
     def __init__(self, config_manager: Any, history_repository: Any, llm_context: Any):
         self.config_manager = config_manager
         self.history_repository = history_repository
         self.llm_context = llm_context
+        self.last_failure_reason: str | None = None
 
     async def build_union_report(
         self,
@@ -137,9 +147,11 @@ ${topics_text}
         """
         基于指定源群列表的最终 JSON，构建跨群聚合日报。
         """
+        self.last_failure_reason = None
         normalized_group_refs = self._deduplicate_group_refs(group_refs)
         if not normalized_group_refs:
             logger.info("跨群聚合日报跳过：未配置有效的源群列表")
+            self.last_failure_reason = "no_source_groups"
             return None
 
         group_snapshots: list[UnionGroupSnapshot] = []
@@ -191,10 +203,12 @@ ${topics_text}
                 report_date,
                 missing_groups,
             )
+            self.last_failure_reason = "source_reports_not_ready"
             return None
 
         if not group_snapshots:
             logger.warning("跨群聚合日报跳过：%s 没有任何可用源群 JSON 结果", report_date)
+            self.last_failure_reason = "no_report_data"
             return None
 
         champion_group = max(
@@ -214,6 +228,8 @@ ${topics_text}
             all_topics=all_topics,
         )
         if summary_result is None:
+            if not self.last_failure_reason:
+                self.last_failure_reason = "union_llm_failed"
             return None
         top_quotes, overview, token_usage = summary_result
 
@@ -225,6 +241,7 @@ ${topics_text}
             topic_highlights,
         )
         if comment_usage is None:
+            self.last_failure_reason = "persona_comment_failed"
             return None
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             token_usage[key] = token_usage.get(key, 0) + comment_usage.get(key, 0)
@@ -535,16 +552,18 @@ ${topics_text}
         all_quotes: list[UnionQuote],
         all_topics: list[UnionTopic],
     ) -> tuple[list[UnionQuote], str, dict[str, int]] | None:
+        quote_candidates = self._build_balanced_quote_candidates(all_quotes)
         prompt = self._build_prompt(
             report_date=report_date,
             champion_group=champion_group,
             group_snapshots=group_snapshots,
-            all_quotes=all_quotes,
+            quote_candidates=quote_candidates,
             all_topics=all_topics,
         )
 
         if not prompt.strip():
             logger.warning("跨群聚合日报 LLM Prompt 为空")
+            self.last_failure_reason = "union_llm_failed"
             return None
 
         response = await call_provider_with_retry(
@@ -560,6 +579,7 @@ ${topics_text}
 
         if response is None:
             logger.warning("跨群聚合日报 LLM 调用失败")
+            self.last_failure_reason = "union_llm_failed"
             return None
 
         result_text = extract_response_text(response)
@@ -567,20 +587,24 @@ ${topics_text}
         parsed = self._parse_strict_json_object(result_text)
         if parsed is None:
             logger.warning("跨群聚合日报 JSON 严格解析失败")
+            self.last_failure_reason = "union_llm_failed"
             return None
 
         raw_top_quotes = parsed.get("top_quotes")
         if not isinstance(raw_top_quotes, list):
             logger.warning("跨群聚合日报 top_quotes 字段无效")
+            self.last_failure_reason = "union_llm_failed"
             return None
-        top_quotes = self._map_llm_quotes(raw_top_quotes, all_quotes)
-        if all_quotes and not top_quotes:
-            logger.warning("跨群聚合日报 Top 金句无法映射到候选原文")
+        top_quotes = self._map_llm_quotes(raw_top_quotes, quote_candidates)
+        if quote_candidates and not top_quotes:
+            logger.warning("跨群聚合日报 Top 金句无法映射到候选编号")
+            self.last_failure_reason = "union_llm_failed"
             return None
 
         overview = str(parsed.get("global_commentary", "")).strip()
         if not overview:
             logger.warning("跨群聚合日报全局点评为空")
+            self.last_failure_reason = "union_llm_failed"
             return None
 
         return top_quotes[:3], overview, token_usage
@@ -843,7 +867,7 @@ ${topics_text}
         report_date: str,
         champion_group: UnionGroupSnapshot,
         group_snapshots: list[UnionGroupSnapshot],
-        all_quotes: list[UnionQuote],
+        quote_candidates: list[UnionQuote],
         all_topics: list[UnionTopic],
     ) -> str:
         groups_summary_lines = [
@@ -859,14 +883,13 @@ ${topics_text}
             f"消息 {champion_group.total_messages}"
         )
 
-        balanced_quote_candidates = self._build_balanced_quote_candidates(all_quotes)
         quotes_text = "\n".join(
             [
                 (
-                    f"{index}. [{quote.group_name}] "
+                    f"quote_id={index} | [{quote.group_name}] "
                     f"{quote.sender}: {quote.content} | 理由: {quote.reason}"
                 )
-                for index, quote in enumerate(balanced_quote_candidates, 1)
+                for index, quote in enumerate(quote_candidates, 1)
             ]
         )
         topics_text = "\n".join(
@@ -892,8 +915,9 @@ ${topics_text}
             topics_text=topics_text or "无可用话题",
         )
         fairness_guard = (
-            "\n\n额外约束：请尽量保证金句覆盖不同群。"
-            "若多个候选质量接近，优先每个群最多入选 1 条；"
+            "\n\n额外约束：候选金句每行都有 quote_id。"
+            "top_quotes 必须只引用这些 quote_id，不要改写金句原文、发言人或群名；"
+            "请尽量保证金句覆盖不同群。若多个候选质量接近，优先每个群最多入选 1 条；"
             "只有明显优势时才允许同群重复入选。"
         )
         return f"{rendered_prompt}{fairness_guard}"
@@ -908,12 +932,10 @@ ${topics_text}
                     "items": {
                         "type": "object",
                         "properties": {
-                            "content": {"type": "string"},
-                            "sender": {"type": "string"},
-                            "group_ref": {"type": "string"},
+                            "quote_id": {"type": "integer"},
                             "reason": {"type": "string"},
                         },
-                        "required": ["content", "sender", "group_ref", "reason"],
+                        "required": ["quote_id", "reason"],
                         "additionalProperties": False,
                     },
                 },
@@ -938,29 +960,22 @@ ${topics_text}
             if not isinstance(raw_quote, dict):
                 continue
 
-            raw_content = str(raw_quote.get("content", "")).strip()
-            raw_sender = str(raw_quote.get("sender", "")).strip()
-            raw_group_ref = str(raw_quote.get("group_ref", "")).strip()
-            if not raw_content or not raw_sender or not raw_group_ref:
+            try:
+                quote_id = int(raw_quote.get("quote_id"))
+            except (TypeError, ValueError):
+                continue
+            matched_index = quote_id - 1
+
+            if matched_index < 0 or matched_index >= len(source_quotes):
+                continue
+            if matched_index in used_indexes:
                 continue
 
-            matched_index = None
-            for index, source_quote in enumerate(source_quotes):
-                if index in used_indexes:
-                    continue
-                if source_quote.group_ref != raw_group_ref:
-                    continue
-                if (
-                    source_quote.content == raw_content
-                    and source_quote.sender == raw_sender
-                ):
-                    matched_index = index
-                    break
-
-            if matched_index is None:
-                continue
-
-            matched_quotes.append(source_quotes[matched_index])
+            reason = str(raw_quote.get("reason", "")).strip()
+            source_quote = source_quotes[matched_index]
+            matched_quotes.append(
+                replace(source_quote, reason=reason or source_quote.reason)
+            )
             used_indexes.add(matched_index)
 
         return matched_quotes

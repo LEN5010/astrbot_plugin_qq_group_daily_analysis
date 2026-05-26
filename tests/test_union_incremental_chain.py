@@ -254,10 +254,8 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "top_quotes": [
                             {
-                                "content": "入选金句",
-                                "sender": "甲",
-                                "group_ref": group_ref,
-                                "reason": "有代表性",
+                                "quote_id": 1,
+                                "reason": "联合日报入选理由",
                             }
                         ],
                         "global_commentary": "整体活跃，讨论集中。",
@@ -298,12 +296,76 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(report)
         self.assertEqual(len(report.top_quotes), 1)
+        self.assertEqual(report.top_quotes[0].content, "入选金句")
+        self.assertEqual(report.top_quotes[0].reason, "联合日报入选理由")
         self.assertEqual(report.top_quotes[0].persona_comment, "这一句够锋利。")
         self.assertEqual(len(report.topic_highlights), 6)
         self.assertTrue(all(item.persona_comment for item in report.topic_highlights))
         self.assertIsNotNone(persona_prompt)
         self.assertNotIn("未入选金句", persona_prompt)
         self.assertNotIn("话题7", persona_prompt)
+
+    async def test_union_quotes_are_selected_by_quote_id_not_rewritten_text(self):
+        date = "2026-05-26"
+        group_ref = "qq:GroupMessage:100"
+        service = UnionDailyReportService(
+            FakeConfig(),
+            FakeHistory(
+                {
+                    (group_ref, date): self._analysis_result(
+                        group_ref,
+                        quotes=[
+                            {"content": "原始金句", "sender": "甲", "reason": "原始理由"}
+                        ],
+                        topics=[
+                            {"topic": "话题1", "detail": "详情1", "contributors": ["甲"]}
+                        ],
+                    )
+                }
+            ),
+            SimpleNamespace(),
+        )
+
+        responses = [
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "top_quotes": [
+                            {"quote_id": 1, "reason": "编号选中的理由"}
+                        ],
+                        "global_commentary": "整体活跃。",
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "quote_comments": [{"index": 1, "comment": "够有代表性。"}],
+                        "topic_comments": [{"index": 1, "comment": "这个话题很集中。"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+        ]
+
+        original_call = union_module.call_provider_with_retry
+
+        async def fake_call(*args, **kwargs):
+            return responses.pop(0)
+
+        union_module.call_provider_with_retry = fake_call
+        try:
+            report = await service.build_union_report([group_ref], date)
+        finally:
+            union_module.call_provider_with_retry = original_call
+
+        self.assertIsNotNone(report)
+        self.assertEqual(report.top_quotes[0].content, "原始金句")
+        self.assertEqual(report.top_quotes[0].sender, "甲")
+        self.assertEqual(report.top_quotes[0].reason, "编号选中的理由")
 
     async def test_invalid_union_llm_json_fails(self):
         date = "2026-05-26"

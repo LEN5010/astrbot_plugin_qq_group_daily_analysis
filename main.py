@@ -312,6 +312,8 @@ class GroupDailyAnalysis(Star):
                 "not_initialized": "联合日报组件未初始化完成",
                 "no_source_groups": "未配置 union_groups_list",
                 "no_report_data": "指定日期没有完整可聚合的源群 JSON",
+                "union_llm_failed": "联合日报总结生成失败",
+                "persona_comment_failed": "人格点评生成失败",
                 "dispatch_failed": "联合日报图片发送失败",
                 "disabled": "跨群日报功能未启用",
                 "source_reports_not_ready": "源群日报在等待窗口内未全部就绪",

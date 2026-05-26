@@ -267,7 +267,7 @@
             "type": "text",
             "editor_mode": true,
             "editor_language": "markdown",
-            "default": "你正在生成一份“A海岸联合日报”。\n\n任务：\n1. 从候选金句中挑选今日 Top 3 金句。\n2. 生成约 200 字的今日整体活跃度与大事件点评。\n\n严格要求：\n- 只返回 JSON。\n- top_quotes 最多 3 条。\n- 不要编造未出现在输入中的群引用、金句原文或发言人。\n- 在质量接近时，优先覆盖不同群。\n\n统计概览：\n${groups_summary_text}\n\n候选金句：\n${quotes_text}\n\n候选话题：\n${topics_text}\n\n返回格式：\n{\n  \"top_quotes\": [\n    {\"content\":\"金句原文\",\"sender\":\"发言人\",\"group_ref\":\"onebot:GroupMessage:123456\",\"reason\":\"入选理由\"}\n  ],\n  \"global_commentary\":\"约 200 字的全局点评\"\n}"
+            "default": "你正在生成一份“A海岸联合日报”。\n\n任务：\n1. 从候选金句中挑选今日 Top 3 金句。\n2. 生成约 200 字的今日整体活跃度与大事件点评。\n\n严格要求：\n- 只返回 JSON。\n- top_quotes 最多 3 条。\n- top_quotes 只能返回候选金句中的 quote_id 和一句入选理由。\n- 不要编造未出现在输入中的候选编号、群引用、金句原文或发言人。\n- 在质量接近时，优先覆盖不同群。\n\n统计概览：\n${groups_summary_text}\n\n候选金句：\n${quotes_text}\n\n候选话题：\n${topics_text}\n\n返回格式：\n{\n  \"top_quotes\": [\n    {\"quote_id\":1,\"reason\":\"入选理由\"}\n  ],\n  \"global_commentary\":\"约 200 字的全局点评\"\n}"
           }
         }
       }

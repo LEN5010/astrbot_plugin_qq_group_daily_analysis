@@ -649,7 +649,12 @@ class AutoScheduler:
                 report_date,
             )
             if report is None:
-                return {"success": False, "reason": "no_report_data"}
+                reason = getattr(
+                    self.union_daily_report_service,
+                    "last_failure_reason",
+                    None,
+                )
+                return {"success": False, "reason": reason or "no_report_data"}
 
             await self._enrich_union_report_names(report)
             sent_count = await self._dispatch_union_report(report, target_groups)
