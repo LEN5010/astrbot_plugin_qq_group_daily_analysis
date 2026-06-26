@@ -588,12 +588,37 @@ class AutoScheduler:
         if not target_group or not target_group[0]:
             return {"success": False, "reason": "no_targets"}
 
-        target_groups = [target_group]
+        normalized_targets = await self._get_single_report_targets_from_override(
+            [target_group]
+        )
+        if not normalized_targets:
+            return {"success": False, "reason": "no_targets"}
+
+        group_id, platform_id, _group_ref = normalized_targets[0]
+        incremental_result = (
+            await self._perform_incremental_analysis_for_group_with_timeout(
+                group_id,
+                platform_id,
+            )
+        )
+
+        target_groups = [(group_id, platform_id)]
         prepare_result = await self._run_single_prepare_core(
             report_date,
             target_groups_override=target_groups,
         )
         if not prepare_result.get("success"):
+            prepare_result["incremental_result"] = incremental_result
+            if prepare_result.get("reason") == "prepare_failed":
+                group_results = prepare_result.get("group_results", {})
+                group_reason = ""
+                if isinstance(group_results, dict):
+                    first_group = next(iter(group_results.values()), {})
+                    if isinstance(first_group, dict):
+                        group_reason = str(first_group.get("reason", ""))
+                incremental_reason = str(incremental_result.get("reason", ""))
+                if group_reason == "no_incremental_data" and incremental_reason:
+                    prepare_result["reason"] = incremental_reason
             return prepare_result
 
         return await self._run_single_report_core(

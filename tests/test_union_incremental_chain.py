@@ -937,6 +937,46 @@ class SchedulerChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["sent_count"], 1)
 
+    async def test_single_manual_runs_incremental_before_prepare_and_dispatch(self):
+        scheduler = self._scheduler(
+            union_enabled=False,
+            single_enabled=True,
+        )
+        calls: list[str] = []
+
+        async def fake_incremental(group_id, platform_id):
+            calls.append(f"incremental:{platform_id}:{group_id}")
+            return {"success": True}
+
+        async def fake_prepare(report_date, target_groups_override=None):
+            calls.append(f"prepare:{report_date}:{target_groups_override[0][0]}")
+            return {"success": True}
+
+        async def fake_dispatch(**kwargs):
+            calls.append(f"dispatch:{kwargs['report_date']}")
+            return {"success": True}
+
+        scheduler._perform_incremental_analysis_for_group_with_timeout = (
+            fake_incremental
+        )
+        scheduler._run_single_prepare_core = fake_prepare
+        scheduler._run_single_report_core = fake_dispatch
+
+        result = await scheduler.run_single_report_manual(
+            "2026-06-27",
+            ("100", "qq"),
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            calls,
+            [
+                "incremental:qq:100",
+                "prepare:2026-06-27:100",
+                "dispatch:2026-06-27",
+            ],
+        )
+
     async def test_single_missing_json_fails_without_dispatch(self):
         service = SingleDailyReportService(
             FakeConfig(),
