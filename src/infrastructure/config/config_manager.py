@@ -15,6 +15,7 @@ class ConfigManager:
     - analysis_features: 分析与人格设置
     - incremental: 增量分析设置
     - union_report: 跨群联合日报设置
+    - single_report: 单群日报设置
     - prompts: 提示词模板
     - performance: 并发限流设置
     """
@@ -289,3 +290,25 @@ class ConfigManager:
         return int(
             self._get_group("union_report").get("union_wait_timeout_minutes", 20)
         )
+
+    # ========== 单群日报配置 ==========
+
+    def get_single_report_enabled(self) -> bool:
+        """获取是否启用单群日报。"""
+        return bool(self._get_group("single_report").get("enabled", False))
+
+    def get_single_report_target_groups(self) -> list[str]:
+        """获取单群日报目标群列表。"""
+        return self._get_group("single_report").get("target_groups", [])
+
+    def get_single_report_time(self) -> str:
+        """获取单群日报固定发送时间。"""
+        return str(self._get_group("single_report").get("report_time", "")).strip()
+
+    def get_single_prepare_lead_minutes(self) -> int:
+        """获取单群日报提前生成最终 JSON 的分钟数。"""
+        return int(self._get_group("single_report").get("prepare_lead_minutes", 10))
+
+    def get_single_wait_timeout_minutes(self) -> int:
+        """获取单群日报等待最终 JSON 就绪的超时时间。"""
+        return int(self._get_group("single_report").get("wait_timeout_minutes", 10))

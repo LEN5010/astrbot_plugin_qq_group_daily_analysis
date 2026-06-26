@@ -1,10 +1,9 @@
 """
-跨群联合日报调度器。
+增量日报调度器。
 
-只保留增量链路：
-1. 活跃时段按固定间隔对 union 源群执行增量提取。
-2. 联合日报发送前执行源群增量最终 JSON 准备。
-3. 到点聚合所有源群 JSON 并发送联合日报图片。
+保留两条增量链路：
+1. 联合日报：源群增量提取 -> 源群最终 JSON -> 跨群聚合 -> 图片发送。
+2. 单群日报：目标群增量提取 -> 目标群最终 JSON -> 图片发送。
 """
 
 from __future__ import annotations
@@ -20,11 +19,12 @@ from ...application.services.analysis_application_service import DuplicateGroupT
 from ...shared.trace_context import TraceContext
 from ...utils.logger import logger
 from ..messaging.message_sender import MessageSender
+from ..reporting.single_report_renderer import SingleReportRenderer
 from ..reporting.union_report_renderer import UnionReportRenderer
 
 
 class AutoScheduler:
-    """增量跨群联合日报调度器。"""
+    """增量日报调度器。"""
 
     def __init__(
         self,
@@ -35,6 +35,7 @@ class AutoScheduler:
         html_render_func=None,
         plugin_instance: Any | None = None,
         union_daily_report_service: Any | None = None,
+        single_daily_report_service: Any | None = None,
     ):
         self.config_manager = config_manager
         self.analysis_service = analysis_service
@@ -43,10 +44,14 @@ class AutoScheduler:
         self.html_render_func = html_render_func
         self.plugin_instance = plugin_instance
         self.union_daily_report_service = union_daily_report_service
+        self.single_daily_report_service = single_daily_report_service
 
         self.message_sender = MessageSender(bot_manager, config_manager)
         self.union_report_renderer = (
             UnionReportRenderer(report_generator) if report_generator else None
+        )
+        self.single_report_renderer = (
+            SingleReportRenderer(report_generator) if report_generator else None
         )
 
         self.scheduler_job_ids: list[str] = []
@@ -54,6 +59,10 @@ class AutoScheduler:
         self._union_report_guard = asyncio.Lock()
         self._union_report_dates_in_progress: set[str] = set()
         self._union_prepare_results: dict[str, dict[str, Any]] = {}
+        self._last_single_report_date_by_group: dict[str, str] = {}
+        self._single_report_guard = asyncio.Lock()
+        self._single_report_group_dates_in_progress: set[tuple[str, str]] = set()
+        self._single_prepare_results: dict[str, dict[str, Any]] = {}
         self._group_name_cache: dict[str, str] = {}
         self._terminating = False
 
@@ -129,20 +138,25 @@ class AutoScheduler:
         return group_id
 
     def schedule_jobs(self, context) -> None:
-        """注册增量采集、联合日报准备和联合日报发送任务。"""
+        """注册增量采集、联合日报和单群日报任务。"""
         self.unschedule_jobs(context)
         self._terminating = False
 
-        if not self.config_manager.get_union_report_enabled():
-            logger.info("跨群联合日报未启用，不注册定时任务。")
+        union_enabled = self.config_manager.get_union_report_enabled()
+        single_enabled = self.config_manager.get_single_report_enabled()
+        if not union_enabled and not single_enabled:
+            logger.info("联合日报和单群日报均未启用，不注册定时任务。")
             return
 
-        if not self.config_manager.get_union_groups_list():
-            logger.info("未配置 union_groups_list，不注册定时任务。")
-            return
-
-        if not self.config_manager.get_union_report_time():
-            logger.info("未配置 union_report_time，不注册定时任务。")
+        has_incremental_targets = bool(
+            (union_enabled and self.config_manager.get_union_groups_list())
+            or (
+                single_enabled
+                and self.config_manager.get_single_report_target_groups()
+            )
+        )
+        if not has_incremental_targets:
+            logger.info("未配置任何增量目标群，不注册定时任务。")
             return
 
         if (
@@ -156,7 +170,22 @@ class AutoScheduler:
 
         scheduler = context.cron_manager.scheduler
         self._schedule_incremental_cron_jobs(scheduler)
-        self._schedule_union_report_time_job(scheduler)
+        if union_enabled:
+            if (
+                self.config_manager.get_union_groups_list()
+                and self.config_manager.get_union_report_time()
+            ):
+                self._schedule_union_report_time_job(scheduler)
+            else:
+                logger.info("跨群联合日报缺少 union_groups_list 或 union_report_time，跳过联合日报定时任务。")
+        if single_enabled:
+            if (
+                self.config_manager.get_single_report_target_groups()
+                and self.config_manager.get_single_report_time()
+            ):
+                self._schedule_single_report_time_job(scheduler)
+            else:
+                logger.info("单群日报缺少 target_groups 或 report_time，跳过单群日报定时任务。")
 
     def _schedule_incremental_cron_jobs(self, scheduler) -> None:
         active_start_hour = self.config_manager.get_incremental_active_start_hour()
@@ -231,6 +260,49 @@ class AutoScheduler:
         except Exception as e:
             logger.error("注册跨群联合日报固定任务失败 (%s): %s", time_str, e)
 
+    def _schedule_single_report_time_job(self, scheduler) -> None:
+        time_str = self.config_manager.get_single_report_time()
+        try:
+            normalized = str(time_str).replace("：", ":").strip()
+            hour, minute = normalized.split(":")
+            publish_hour = int(hour)
+            publish_minute = int(minute)
+
+            publish_job_id = "astrbot_plugin_single_daily_report_trigger"
+            scheduler.add_job(
+                self._run_single_report_on_schedule,
+                trigger=CronTrigger(hour=publish_hour, minute=publish_minute),
+                id=publish_job_id,
+                replace_existing=True,
+                misfire_grace_time=60,
+            )
+            self.scheduler_job_ids.append(publish_job_id)
+            logger.info("已注册单群日报发送任务: %s", normalized)
+
+            lead_minutes = max(0, self.config_manager.get_single_prepare_lead_minutes())
+            prepare_hour, prepare_minute = self._shift_clock_time(
+                publish_hour,
+                publish_minute,
+                -lead_minutes,
+            )
+            prepare_job_id = "astrbot_plugin_single_daily_report_prepare_trigger"
+            scheduler.add_job(
+                self._run_single_prepare_on_schedule,
+                trigger=CronTrigger(hour=prepare_hour, minute=prepare_minute),
+                id=prepare_job_id,
+                replace_existing=True,
+                misfire_grace_time=60,
+            )
+            self.scheduler_job_ids.append(prepare_job_id)
+            logger.info(
+                "已注册单群日报准备任务: %02d:%02d (提前 %d 分钟)",
+                prepare_hour,
+                prepare_minute,
+                lead_minutes,
+            )
+        except Exception as e:
+            logger.error("注册单群日报固定任务失败 (%s): %s", time_str, e)
+
     @staticmethod
     def _shift_clock_time(hour: int, minute: int, delta_minutes: int) -> tuple[int, int]:
         total_minutes = (hour * 60 + minute + delta_minutes) % (24 * 60)
@@ -256,13 +328,13 @@ class AutoScheduler:
         self.scheduler_job_ids.clear()
 
     async def _run_incremental_analysis(self) -> None:
-        """对所有 union 源群执行一次增量提取。"""
+        """对所有已配置日报目标群执行一次增量提取。"""
         if self._terminating:
             return
 
         target_list = await self._get_incremental_runtime_targets()
         if not target_list:
-            logger.info("没有可执行增量提取的 union 源群")
+            logger.info("没有可执行增量提取的日报目标群")
             return
 
         max_concurrent = self.config_manager.get_max_concurrent_tasks()
@@ -285,7 +357,7 @@ class AutoScheduler:
             tasks.append(
                 asyncio.create_task(
                     dispatch_group(group_id, platform_id),
-                    name=f"union_incremental_{group_id}",
+                    name=f"daily_incremental_{group_id}",
                 )
             )
 
@@ -461,6 +533,30 @@ class AutoScheduler:
             require_all_groups_ready=True,
         )
 
+    async def _run_single_prepare_on_schedule(self) -> None:
+        if self._terminating or not self.config_manager.get_single_report_enabled():
+            return
+
+        report_date = datetime.now().strftime("%Y-%m-%d")
+        result = await self._run_single_prepare_core(report_date)
+        if not result.get("success"):
+            logger.warning(
+                "单群日报准备失败: date=%s reason=%s",
+                report_date,
+                result.get("reason", "unknown"),
+            )
+
+    async def _run_single_report_on_schedule(self) -> None:
+        if self._terminating or not self.config_manager.get_single_report_enabled():
+            return
+
+        report_date = datetime.now().strftime("%Y-%m-%d")
+        await self._run_single_report_core(
+            report_date=report_date,
+            target_groups_override=None,
+            require_all_groups_ready=True,
+        )
+
     async def run_union_prepare_manual(self, report_date: str) -> dict[str, Any]:
         return await self._run_union_prepare_core(report_date)
 
@@ -479,6 +575,30 @@ class AutoScheduler:
         return await self._run_union_report_core(
             report_date=report_date,
             target_groups_override=target_groups_override,
+            skip_enabled_check=True,
+            bypass_daily_guard=True,
+            require_all_groups_ready=True,
+        )
+
+    async def run_single_report_manual(
+        self,
+        report_date: str,
+        target_group: tuple[str, str | None],
+    ) -> dict[str, Any]:
+        if not target_group or not target_group[0]:
+            return {"success": False, "reason": "no_targets"}
+
+        target_groups = [target_group]
+        prepare_result = await self._run_single_prepare_core(
+            report_date,
+            target_groups_override=target_groups,
+        )
+        if not prepare_result.get("success"):
+            return prepare_result
+
+        return await self._run_single_report_core(
+            report_date=report_date,
+            target_groups_override=target_groups,
             skip_enabled_check=True,
             bypass_daily_guard=True,
             require_all_groups_ready=True,
@@ -575,6 +695,205 @@ class AutoScheduler:
         )
         self._union_prepare_results[report_date] = result_summary
         return result_summary
+
+    async def _run_single_prepare_core(
+        self,
+        report_date: str,
+        target_groups_override: list[tuple[str, str | None]] | None = None,
+    ) -> dict[str, Any]:
+        target_list = await self._get_single_report_targets_from_override(
+            target_groups_override
+        )
+        if not target_list:
+            result = {"success": False, "reason": "no_targets"}
+            self._single_prepare_results[report_date] = result
+            return result
+
+        max_concurrent = self.config_manager.get_max_concurrent_tasks()
+        sem = asyncio.Semaphore(max_concurrent)
+
+        async def dispatch_group(
+            gid: str, pid: str | None
+        ) -> dict[str, Any] | None:
+            async with sem:
+                return await self._perform_incremental_final_report_for_group_with_timeout(
+                    gid,
+                    pid,
+                    report_date,
+                )
+
+        tasks = [
+            asyncio.create_task(
+                dispatch_group(gid, pid),
+                name=f"single_prepare_incremental_{gid}",
+            )
+            for gid, pid, _group_ref in target_list
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        success_count = 0
+        skip_count = 0
+        error_count = 0
+        group_results: dict[str, dict[str, Any]] = {}
+        for index, result in enumerate(results):
+            _gid, _pid, group_ref = target_list[index]
+            if isinstance(result, Exception):
+                error_count += 1
+                group_results[group_ref] = {
+                    "success": False,
+                    "reason": str(result),
+                    "status": "error",
+                }
+            elif isinstance(result, dict) and not result.get("success", True):
+                skip_count += 1
+                group_results[group_ref] = {
+                    "success": False,
+                    "reason": result.get("reason", "unknown"),
+                    "status": "skipped",
+                }
+            else:
+                success_count += 1
+                group_results[group_ref] = {"success": True, "status": "success"}
+
+        success = success_count == len(target_list)
+        result_summary: dict[str, Any] = {
+            "success": success,
+            "prepared_count": len(target_list),
+            "success_count": success_count,
+            "skip_count": skip_count,
+            "error_count": error_count,
+            "group_results": group_results,
+        }
+        if not success:
+            result_summary["reason"] = "prepare_failed"
+
+        logger.info(
+            "单群日报准备完成 - date=%s 成功=%d 跳过=%d 失败=%d 总计=%d",
+            report_date,
+            success_count,
+            skip_count,
+            error_count,
+            len(target_list),
+        )
+        self._single_prepare_results[report_date] = result_summary
+        return result_summary
+
+    async def _run_single_report_core(
+        self,
+        report_date: str,
+        target_groups_override: list[tuple[str, str | None]] | None,
+        skip_enabled_check: bool = False,
+        bypass_daily_guard: bool = False,
+        require_all_groups_ready: bool = False,
+    ) -> dict[str, Any]:
+        if not skip_enabled_check and not self.config_manager.get_single_report_enabled():
+            return {"success": False, "reason": "disabled"}
+        if (
+            not self.single_daily_report_service
+            or not self.report_generator
+            or not self.single_report_renderer
+            or not self.html_render_func
+        ):
+            return {"success": False, "reason": "not_initialized"}
+
+        target_list = await self._get_single_report_targets_from_override(
+            target_groups_override
+        )
+        if not target_list:
+            return {"success": False, "reason": "no_targets"}
+
+        selected_targets: list[tuple[str, str | None, str]] = []
+        skipped_already_sent: list[str] = []
+        skipped_running: list[str] = []
+        if not bypass_daily_guard:
+            async with self._single_report_guard:
+                for group_id, platform_id, group_ref in target_list:
+                    guard_key = (report_date, group_ref)
+                    if self._last_single_report_date_by_group.get(group_ref) == report_date:
+                        skipped_already_sent.append(group_ref)
+                        continue
+                    if guard_key in self._single_report_group_dates_in_progress:
+                        skipped_running.append(group_ref)
+                        continue
+                    self._single_report_group_dates_in_progress.add(guard_key)
+                    selected_targets.append((group_id, platform_id, group_ref))
+        else:
+            selected_targets = target_list
+
+        if not selected_targets:
+            if skipped_running:
+                return {"success": False, "reason": "already_running"}
+            return {"success": False, "reason": "already_sent"}
+
+        sent_group_refs: list[str] = []
+        failed_groups: dict[str, str] = {}
+        try:
+            missing_group_refs: list[str] = []
+            if require_all_groups_ready:
+                missing_group_refs = await self._wait_for_single_reports_ready(
+                    [group_ref for _gid, _pid, group_ref in selected_targets],
+                    report_date,
+                    max(0, self.config_manager.get_single_wait_timeout_minutes()),
+                )
+
+            for group_id, platform_id, group_ref in selected_targets:
+                if self._terminating:
+                    failed_groups[group_ref] = "terminating"
+                    continue
+                if group_ref in missing_group_refs:
+                    failed_groups[group_ref] = "single_reports_not_ready"
+                    continue
+
+                TraceContext.set(
+                    TraceContext.generate(
+                        prefix="single",
+                        group_name=await self._get_group_name_safe(group_id, platform_id),
+                    )
+                )
+                report = await self.single_daily_report_service.build_single_report(
+                    group_ref,
+                    report_date,
+                )
+                if report is None:
+                    failed_groups[group_ref] = (
+                        getattr(
+                            self.single_daily_report_service,
+                            "last_failure_reason",
+                            None,
+                        )
+                        or "single_report_not_ready"
+                    )
+                    continue
+
+                await self._enrich_single_report_name(report)
+                if await self._dispatch_single_report(report, group_id, platform_id):
+                    sent_group_refs.append(group_ref)
+                else:
+                    failed_groups[group_ref] = "dispatch_failed"
+
+            if sent_group_refs:
+                if not bypass_daily_guard:
+                    async with self._single_report_guard:
+                        for group_ref in sent_group_refs:
+                            self._last_single_report_date_by_group[group_ref] = (
+                                report_date
+                            )
+                return {
+                    "success": True,
+                    "sent_count": len(sent_group_refs),
+                    "sent_group_refs": sent_group_refs,
+                    "failed_groups": failed_groups,
+                }
+
+            reason = next(iter(failed_groups.values()), "dispatch_failed")
+            return {"success": False, "reason": reason, "failed_groups": failed_groups}
+        finally:
+            if not bypass_daily_guard:
+                async with self._single_report_guard:
+                    for _group_id, _platform_id, group_ref in selected_targets:
+                        self._single_report_group_dates_in_progress.discard(
+                            (report_date, group_ref)
+                        )
 
     async def _run_union_report_core(
         self,
@@ -707,6 +1026,41 @@ class AutoScheduler:
                 sent_count += 1
         return sent_count
 
+    async def _dispatch_single_report(
+        self,
+        report,
+        group_id: str,
+        platform_id: str | None,
+    ) -> bool:
+        """固定以图片形式发送单群日报；失败直接返回 False。"""
+        if not self.html_render_func:
+            return False
+
+        html_content = self.single_report_renderer.render_html(report)
+        image_url = await self.report_generator.render_html_content_to_image(
+            html_content,
+            f"single_{report.group_ref}_{report.report_date}",
+            self.html_render_func,
+        )
+        if not image_url:
+            logger.warning("单群日报图片渲染失败: group_ref=%s", report.group_ref)
+            return False
+
+        resolved_platform_id = platform_id or await self.get_platform_id_for_group(
+            group_id
+        )
+        if not resolved_platform_id:
+            logger.warning("单群日报目标群 %s 无法解析平台，跳过发送", group_id)
+            return False
+
+        caption = f"📊 {report.group_name} 每日日报 ({report.report_date})"
+        return await self.message_sender.send_image_smart(
+            group_id,
+            image_url,
+            caption,
+            resolved_platform_id,
+        )
+
     async def _enrich_union_report_names(self, report) -> None:
         name_map: dict[str, str] = {}
         for snapshot in report.group_snapshots:
@@ -732,6 +1086,14 @@ class AutoScheduler:
         for user in report.runner_up_users:
             if user.group_ref in name_map:
                 user.group_name = name_map[user.group_ref]
+
+    async def _enrich_single_report_name(self, report) -> None:
+        resolved_name = await self._get_group_name_safe(
+            report.group_id,
+            report.platform_id or None,
+        )
+        if resolved_name:
+            report.group_name = resolved_name
 
     @staticmethod
     def _parse_union_group_ref(group_ref: str) -> tuple[str | None, str]:
@@ -799,10 +1161,63 @@ class AutoScheduler:
                 targets.append((group_id, platform_id, group_ref))
         return targets
 
+    async def _get_single_report_targets(
+        self,
+    ) -> list[tuple[str, str | None, str]]:
+        target_group_refs = await self._normalize_union_group_refs(
+            self.config_manager.get_single_report_target_groups()
+        )
+        targets: list[tuple[str, str | None, str]] = []
+        for group_ref in target_group_refs:
+            if not self.config_manager.is_group_allowed(group_ref):
+                logger.info("单群日报目标群 %s 未通过基础群准入，跳过", group_ref)
+                continue
+            platform_id, group_id = self._parse_union_group_ref(group_ref)
+            if group_id:
+                targets.append((group_id, platform_id, group_ref))
+        return targets
+
+    async def _get_single_report_targets_from_override(
+        self,
+        target_groups_override: list[tuple[str, str | None]] | None,
+    ) -> list[tuple[str, str | None, str]]:
+        if target_groups_override is None:
+            return await self._get_single_report_targets()
+
+        targets: list[tuple[str, str | None, str]] = []
+        seen: set[str] = set()
+        for group_id, platform_id in target_groups_override:
+            if not group_id:
+                continue
+            resolved_platform_id = platform_id
+            if resolved_platform_id is None:
+                resolved_platform_id = await self.get_platform_id_for_group(group_id)
+                if resolved_platform_id is None:
+                    logger.warning("单群日报目标群 %s 无法自动解析平台，已跳过", group_id)
+                    continue
+            group_ref = self._build_group_ref(group_id, resolved_platform_id)
+            if group_ref in seen:
+                continue
+            targets.append((group_id, resolved_platform_id, group_ref))
+            seen.add(group_ref)
+        return targets
+
     async def _get_incremental_runtime_targets(
         self,
     ) -> list[tuple[str, str | None, str]]:
-        targets = await self._get_union_source_targets()
+        targets: list[tuple[str, str | None, str]] = []
+        seen: set[str] = set()
+        configured_targets: list[tuple[str, str | None, str]] = []
+        if self.config_manager.get_union_report_enabled():
+            configured_targets.extend(await self._get_union_source_targets())
+        if self.config_manager.get_single_report_enabled():
+            configured_targets.extend(await self._get_single_report_targets())
+
+        for group_id, platform_id, group_ref in configured_targets:
+            if group_ref in seen:
+                continue
+            targets.append((group_id, platform_id, group_ref))
+            seen.add(group_ref)
         logger.info("后台增量提取目标解析完成：共 %d 个群", len(targets))
         return targets
 
@@ -834,6 +1249,39 @@ class AutoScheduler:
             missing_group_refs = (
                 self.union_daily_report_service.get_missing_group_refs_for_date(
                     source_group_refs,
+                    report_date,
+                )
+            )
+        return missing_group_refs
+
+    async def _wait_for_single_reports_ready(
+        self,
+        group_refs: list[str],
+        report_date: str,
+        wait_timeout_minutes: int,
+    ) -> list[str]:
+        missing_group_refs = (
+            self.single_daily_report_service.get_missing_group_refs_for_date(
+                group_refs,
+                report_date,
+            )
+        )
+        if not missing_group_refs:
+            return []
+
+        timeout_seconds = wait_timeout_minutes * 60
+        if timeout_seconds <= 0:
+            return missing_group_refs
+
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while missing_group_refs and not self._terminating:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(30, remaining))
+            missing_group_refs = (
+                self.single_daily_report_service.get_missing_group_refs_for_date(
+                    group_refs,
                     report_date,
                 )
             )

@@ -2,7 +2,7 @@
   "basic": {
     "description": "基础设置",
     "type": "object",
-    "hint": "只控制插件准入、分析窗口和基础过滤。跨群源群与发送目标请在“跨群联合日报”中配置。",
+    "hint": "只控制插件准入、分析窗口和基础过滤。跨群源群在“跨群联合日报”中配置，单群日报目标在“单群日报”中配置。",
     "items": {
       "group_list_mode": {
         "description": "群聊准入模式",
@@ -125,7 +125,7 @@
   "incremental": {
     "description": "源群增量分析设置",
     "type": "object",
-    "hint": "增量源群固定来自 union_groups_list，不再单独配置增量名单。",
+    "hint": "增量目标来自 union_groups_list 与 single_report.target_groups 的并集。",
     "items": {
       "interval_minutes": {
         "type": "int",
@@ -224,6 +224,44 @@
         "description": "源群 JSON 等待超时分钟数",
         "default": 20,
         "hint": "发送时间到达后最多等待多久。任一源群仍未就绪则本次失败。"
+      }
+    }
+  },
+  "single_report": {
+    "description": "单群日报",
+    "type": "object",
+    "hint": "单群日报只读取目标群自己的增量最终 JSON，并将图片发回该群；不参与跨群聚合。",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "启用单群日报",
+        "default": false,
+        "hint": "开启后会为下方目标群注册单群日报定时任务。"
+      },
+      "target_groups": {
+        "type": "list",
+        "description": "单群日报目标群列表",
+        "default": [],
+        "hint": "推荐填写完整会话 ID，例如 onebot:GroupMessage:123456。每个目标群每天生成并发回一张自己的单群日报。",
+        "items": {"type": "string"}
+      },
+      "report_time": {
+        "type": "string",
+        "description": "单群日报固定发送时间",
+        "default": "23:10",
+        "hint": "格式 HH:MM。"
+      },
+      "prepare_lead_minutes": {
+        "type": "int",
+        "description": "提前生成单群 JSON 分钟数",
+        "default": 10,
+        "hint": "发送前提前多久将目标群增量批次合并为最终 JSON。"
+      },
+      "wait_timeout_minutes": {
+        "type": "int",
+        "description": "单群 JSON 等待超时分钟数",
+        "default": 10,
+        "hint": "发送时间到达后最多等待多久。目标群仍未就绪则该群本次失败。"
       }
     }
   },

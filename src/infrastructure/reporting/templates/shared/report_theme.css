@@ -1,0 +1,245 @@
+:root {
+    --bg: #fdf6f8;
+    --paper: #ffffff;
+    --ink: #4a4a4a;
+    --strong: #32272c;
+    --muted: #8f7480;
+    --line: #fae3ea;
+    --accent: #E799B0;
+    --accent-soft: #fff5f7;
+    --accent-deep: #9d4c65;
+    --shadow: 0 8px 24px rgba(231, 153, 176, 0.25);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 28px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+.report-page {
+    width: 960px;
+    margin: 0 auto;
+    overflow: hidden;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+}
+
+.report-header {
+    padding: 38px 34px 32px;
+    color: #ffffff;
+    text-align: center;
+    background: linear-gradient(135deg, #E799B0 0%, #f1b3c5 100%);
+}
+
+.eyebrow {
+    margin-bottom: 12px;
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    opacity: 0.88;
+}
+
+h1 {
+    margin: 0;
+    font-size: 40px;
+    line-height: 1.2;
+    letter-spacing: 0;
+}
+
+.header-subtitle {
+    margin: 10px 0 0;
+    font-size: 16px;
+    opacity: 0.92;
+}
+
+.meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 18px;
+}
+
+.pill {
+    padding: 8px 13px;
+    border: 1px solid rgba(255, 255, 255, 0.46);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+    font-size: 13px;
+}
+
+.report-content {
+    padding: 34px 32px 38px;
+}
+
+.section {
+    margin-top: 26px;
+}
+
+.section:first-child {
+    margin-top: 0;
+}
+
+.section-title {
+    margin: 0 0 14px;
+    color: var(--accent-deep);
+    font-size: 22px;
+    line-height: 1.35;
+}
+
+.summary-grid,
+.item-grid,
+.topic-grid {
+    display: grid;
+    gap: 14px;
+}
+
+.summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.item-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.topic-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.metric-card,
+.callout-card,
+.item-card,
+.table-row {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--paper);
+}
+
+.metric-card,
+.item-card {
+    padding: 18px;
+}
+
+.callout-card {
+    padding: 20px 22px;
+    border-left: 5px solid var(--accent);
+    background: var(--accent-soft);
+}
+
+.metric-label,
+.meta-text,
+.footer {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.metric-value {
+    margin-top: 8px;
+    color: var(--strong);
+    font-size: 34px;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.metric-note {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.overview-text,
+.topic-detail {
+    margin: 0;
+    color: var(--ink);
+    font-size: 16px;
+    line-height: 1.78;
+}
+
+.rank-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.quote-text {
+    margin: 14px 0 14px;
+    color: var(--strong);
+    font-size: 18px;
+    line-height: 1.68;
+}
+
+.item-title {
+    margin: 12px 0 10px;
+    color: var(--strong);
+    font-size: 17px;
+    line-height: 1.45;
+}
+
+.persona-comment {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.55;
+}
+
+.persona-label {
+    margin-right: 4px;
+    color: var(--accent-deep);
+}
+
+.table {
+    display: grid;
+    gap: 8px;
+}
+
+.table-row {
+    display: grid;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 14px;
+}
+
+.table-row.highlight {
+    border-color: rgba(231, 153, 176, 0.48);
+    background: var(--accent-soft);
+}
+
+.name {
+    color: var(--strong);
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 30px;
+    padding-top: 18px;
+    border-top: 1px dashed var(--line);
+}
+
+strong {
+    color: var(--strong);
+}

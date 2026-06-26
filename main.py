@@ -1,8 +1,9 @@
 """
-增量跨群联合日报插件
+增量日报插件
 
-唯一业务链路：
-源群增量采集 -> 源群 JSON 中间结果 -> 跨群聚合 -> 联合日报图片发送。
+业务链路：
+1. 源群增量采集 -> 源群 JSON 中间结果 -> 跨群聚合 -> 联合日报图片发送。
+2. 目标群增量采集 -> 目标群 JSON 中间结果 -> 单群日报图片发送。
 """
 
 import asyncio
@@ -20,6 +21,9 @@ from .src.application.services.analysis_application_service import (
 )
 from .src.application.services.message_processing_service import (
     MessageProcessingService,
+)
+from .src.application.services.single_daily_report_service import (
+    SingleDailyReportService,
 )
 from .src.application.services.union_daily_report_service import (
     UnionDailyReportService,
@@ -46,11 +50,11 @@ from .src.utils.resilience import GlobalRateLimiter
 @register(
     "astrbot_plugin_qq_group_daily_analysis",
     "LEN5010",
-    "基于增量分析的跨群联合日报插件",
+    "基于增量分析的联合日报与单群日报插件",
     "5.0.0",
 )
 class GroupDailyAnalysis(Star):
-    """增量跨群联合日报插件主类。"""
+    """增量日报插件主类。"""
 
     config: AstrBotConfig
     config_manager: ConfigManager
@@ -63,6 +67,7 @@ class GroupDailyAnalysis(Star):
     analysis_domain_service: AnalysisDomainService
     llm_analyzer: LLMAnalyzer
     union_daily_report_service: UnionDailyReportService
+    single_daily_report_service: SingleDailyReportService
     incremental_store: IncrementalStore
     incremental_merge_service: IncrementalMergeService
     analysis_service: AnalysisApplicationService
@@ -102,6 +107,10 @@ class GroupDailyAnalysis(Star):
             self.history_repository,
             context,
         )
+        self.single_daily_report_service = SingleDailyReportService(
+            self.config_manager,
+            self.history_repository,
+        )
 
         self.incremental_store = IncrementalStore(self)
         self.incremental_merge_service = IncrementalMergeService()
@@ -128,6 +137,7 @@ class GroupDailyAnalysis(Star):
             self.html_render,
             plugin_instance=self,
             union_daily_report_service=self.union_daily_report_service,
+            single_daily_report_service=self.single_daily_report_service,
         )
 
         GlobalRateLimiter.get_instance(self.config_manager.get_llm_max_concurrent())
@@ -327,6 +337,83 @@ class GroupDailyAnalysis(Star):
         except Exception as e:
             logger.error(f"跨群联合日报测试失败: {e}", exc_info=True)
             yield event.plain_result(f"跨群联合日报测试失败: {e}")
+        finally:
+            if current_task:
+                self._background_tasks.discard(current_task)
+
+    @filter.command("单群日报测试", alias={"single_report_test"})
+    @filter.permission_type(PermissionType.ADMIN)
+    async def single_report_test(
+        self,
+        event: AstrMessageEvent,
+        report_date: str = "",
+    ):
+        """
+        手动测试单群日报。
+        用法: /单群日报测试 [YYYY-MM-DD]
+
+        测试结果只发送到当前群。
+        """
+        if self._terminating:
+            return
+
+        event.should_call_llm(True)
+        current_task = asyncio.current_task()
+        if current_task:
+            self._background_tasks.add(current_task)
+
+        try:
+            group_id = self._get_group_id_from_event(event)
+            platform_id = self._get_platform_id_from_event(event)
+            if not group_id:
+                yield event.plain_result("请在群聊中使用此命令")
+                return
+
+            target_date = report_date.strip() if report_date else ""
+            if target_date:
+                try:
+                    datetime.strptime(target_date, "%Y-%m-%d")
+                except ValueError:
+                    yield event.plain_result(
+                        "日期格式错误，请使用 YYYY-MM-DD，例如 /单群日报测试 2026-04-08"
+                    )
+                    return
+            else:
+                target_date = datetime.now().strftime("%Y-%m-%d")
+
+            self.bot_manager.update_from_event(event)
+            yield event.plain_result(
+                f"开始执行单群日报测试，日期: {target_date}。"
+                "本次只发送到当前群。"
+            )
+
+            result = await self.auto_scheduler.run_single_report_manual(
+                report_date=target_date,
+                target_group=(group_id, platform_id),
+            )
+            if result.get("success"):
+                yield event.plain_result("单群日报测试完成，已发送到当前群")
+                return
+
+            reason = result.get("reason", "unknown")
+            reason_map = {
+                "no_targets": "没有目标群",
+                "not_initialized": "单群日报组件未初始化完成",
+                "disabled": "单群日报功能未启用",
+                "single_report_not_ready": "指定日期没有该群的增量最终 JSON",
+                "invalid_single_report_data": "单群最终 JSON 数据无效",
+                "single_reports_not_ready": "单群日报在等待窗口内未就绪",
+                "prepare_failed": "单群增量最终 JSON 准备失败",
+                "dispatch_failed": "单群日报图片发送失败",
+                "already_sent": "今天的单群日报已经发送过",
+                "already_running": "当前日期的单群日报正在执行中",
+            }
+            yield event.plain_result(
+                f"单群日报测试失败: {reason_map.get(reason, reason)}"
+            )
+        except Exception as e:
+            logger.error(f"单群日报测试失败: {e}", exc_info=True)
+            yield event.plain_result(f"单群日报测试失败: {e}")
         finally:
             if current_task:
                 self._background_tasks.discard(current_task)

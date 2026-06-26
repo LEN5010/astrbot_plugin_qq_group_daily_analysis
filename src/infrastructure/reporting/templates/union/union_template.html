@@ -5,364 +5,70 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>A海岸联合日报</title>
     <style>
-        :root {
-            --bg: #fff6fa;
-            --paper: rgba(255, 250, 252, 0.96);
-            --ink: #2a1f25;
-            --muted: #7a6670;
-            --line: rgba(122, 47, 71, 0.12);
-            --accent: #E799B0;
-            --accent-soft: rgba(231, 153, 176, 0.18);
-            --champion: #7a2f47;
-            --card-shadow: 0 24px 60px rgba(122, 47, 71, 0.16);
+        {{ theme_css | safe }}
+
+        .union-table-row {
+            grid-template-columns: 1.4fr 0.7fr 0.7fr 0.7fr;
         }
 
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-            color: var(--ink);
-            background:
-                radial-gradient(circle at top left, rgba(231, 153, 176, 0.28), transparent 34%),
-                radial-gradient(circle at top right, rgba(122, 47, 71, 0.14), transparent 28%),
-                linear-gradient(180deg, #fff8fb 0%, #f8e7ee 100%);
-            padding: 36px;
-        }
-
-        .page {
-            width: 1180px;
-            margin: 0 auto;
-            background: var(--paper);
-            border: 1px solid rgba(255, 255, 255, 0.7);
-            border-radius: 32px;
-            box-shadow: var(--card-shadow);
-            overflow: hidden;
-        }
-
-        .hero {
-            padding: 42px 48px 28px;
-            background:
-                linear-gradient(135deg, rgba(122, 47, 71, 0.96), rgba(70, 31, 45, 0.94)),
-                linear-gradient(120deg, rgba(231, 153, 176, 0.48), transparent);
-            color: #fff8fb;
-        }
-
-        .eyebrow {
-            letter-spacing: 0.28em;
-            font-size: 13px;
-            opacity: 0.78;
-            text-transform: uppercase;
-            margin-bottom: 16px;
-        }
-
-        h1 {
-            margin: 0;
-            font-size: 46px;
-            line-height: 1.1;
-        }
-
-        .hero-meta {
-            display: flex;
-            gap: 14px;
-            flex-wrap: wrap;
-            margin-top: 18px;
-        }
-
-        .hero-pill {
-            padding: 10px 16px;
-            border: 1px solid rgba(255, 255, 255, 0.18);
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.08);
-            font-size: 14px;
-        }
-
-        .content {
-            padding: 34px 40px 42px;
-        }
-
-        .section {
-            margin-top: 26px;
-        }
-
-        .section-title {
-            margin: 0 0 16px;
-            font-size: 22px;
-            color: var(--champion);
-        }
-
-        .summary-grid {
-            display: grid;
-            grid-template-columns: 1.2fr 0.8fr 0.8fr;
-            gap: 16px;
-        }
-
-        .card {
-            border-radius: 24px;
-            padding: 22px;
-            background: #fffafd;
-            border: 1px solid var(--line);
-        }
-
-        .champion-card {
-            background:
-                linear-gradient(135deg, rgba(122, 47, 71, 0.96), rgba(70, 31, 45, 0.92));
-            color: #fff8fb;
-        }
-
-        .champion-label,
-        .stat-label,
-        .quote-meta,
-        .topic-meta {
-            color: var(--muted);
-            font-size: 13px;
-        }
-
-        .champion-card .champion-label,
-        .champion-card .stat-label {
-            color: rgba(255, 248, 251, 0.72);
-        }
-
-        .champion-name {
-            margin-top: 12px;
-            font-size: 30px;
-            font-weight: 700;
-        }
-
-        .champion-value {
-            margin-top: 10px;
-            font-size: 54px;
-            font-weight: 800;
-            line-height: 1;
-        }
-
-        .stat-value {
-            margin-top: 10px;
-            font-size: 34px;
-            font-weight: 700;
-        }
-
-        .overview-card {
-            background: linear-gradient(180deg, rgba(231, 153, 176, 0.14), rgba(231, 153, 176, 0.04));
-        }
-
-        .overview-text {
-            margin: 0;
-            font-size: 17px;
-            line-height: 1.85;
-        }
-
-        .list-grid {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 16px;
-        }
-
-        .quote-card {
-            background: white;
-        }
-
-        .quote-rank {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 34px;
-            height: 34px;
-            border-radius: 50%;
-            background: var(--accent);
-            color: white;
-            font-weight: 700;
-            font-size: 15px;
-        }
-
-        .quote-content {
-            margin: 16px 0 18px;
-            font-size: 19px;
-            line-height: 1.75;
-            min-height: 168px;
-        }
-
-        .quote-meta strong,
-        .topic-title strong,
-        .champion-name strong {
-            color: inherit;
-        }
-
-        .group-table {
-            display: grid;
-            gap: 10px;
-        }
-
-        .group-row {
-            display: grid;
-            grid-template-columns: 1.3fr 0.7fr 0.7fr 0.7fr;
-            gap: 12px;
-            align-items: center;
-            padding: 14px 16px;
-            border-radius: 18px;
-            background: white;
-            border: 1px solid var(--line);
-        }
-
-        .group-row.highlight {
-            background: rgba(231, 153, 176, 0.16);
-            border-color: rgba(231, 153, 176, 0.36);
-        }
-
-        .group-name {
-            font-size: 16px;
-            font-weight: 700;
-        }
-
-        .group-id {
-            font-size: 12px;
-            color: var(--muted);
-            margin-top: 4px;
-        }
-
-        .topic-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 14px;
-        }
-
-        .topic-card {
-            background: white;
-        }
-
-        .topic-title {
-            margin: 0 0 10px;
-            font-size: 18px;
-        }
-
-        .topic-detail {
-            margin: 10px 0 0;
-            color: #43323a;
-            font-size: 15px;
-            line-height: 1.75;
-        }
-
-        .persona-comment {
-            margin-top: 12px;
-            padding: 12px 14px;
-            border-radius: 14px;
-            background: var(--accent-soft);
-            color: var(--champion);
-            font-size: 14px;
-            line-height: 1.55;
-            font-weight: 700;
-        }
-
-        .persona-label {
-            margin-right: 4px;
-            color: #7a2f47;
-        }
-
-        .footer {
-            margin-top: 28px;
-            padding-top: 18px;
-            border-top: 1px dashed var(--line);
-            font-size: 13px;
-            color: var(--muted);
-            display: flex;
-            justify-content: space-between;
-            gap: 12px;
-        }
-
-        .leaderboard {
-            margin-top: 18px;
-            display: grid;
-            gap: 10px;
-        }
-
-        .leaderboard-row {
-            display: grid;
-            grid-template-columns: 56px 1fr auto;
-            gap: 12px;
-            align-items: center;
-            padding: 12px 14px;
-            border-radius: 16px;
-            background: rgba(255, 255, 255, 0.7);
-            border: 1px solid var(--line);
-        }
-
-        .leaderboard-rank {
-            font-size: 20px;
-            font-weight: 800;
-            color: var(--accent);
-        }
-
-        .leaderboard-name {
-            font-size: 16px;
-            font-weight: 700;
-        }
-
-        .leaderboard-group {
-            margin-top: 4px;
-            font-size: 13px;
-            color: var(--muted);
-        }
-
-        .leaderboard-count {
-            font-size: 15px;
-            font-weight: 700;
-            color: var(--champion);
+        .water-row {
+            grid-template-columns: 52px 1fr auto;
         }
     </style>
 </head>
 <body>
-    <div class="page">
-        <section class="hero">
+    <div class="report-page">
+        <header class="report-header">
             <div class="eyebrow">A Coast Daily Report</div>
             <h1>A海岸联合日报</h1>
-            <div class="hero-meta">
-                <div class="hero-pill">日期 {{ report.report_date }}</div>
-                <div class="hero-pill">今日 A海岸 {{ report.total_messages }} 条消息</div>
-                <div class="hero-pill">今日 A海岸 {{ report.total_participants }} 人参与</div>
+            <p class="header-subtitle">跨群增量分析汇总</p>
+            <div class="meta-row">
+                <span class="pill">日期 {{ report.report_date }}</span>
+                <span class="pill">{{ report.total_messages }} 条消息</span>
+                <span class="pill">{{ report.total_participants }} 人参与</span>
             </div>
-        </section>
+        </header>
 
-        <main class="content">
+        <main class="report-content">
             <section class="section">
                 <div class="summary-grid">
-                    <article class="card champion-card">
-                        <div class="champion-label">今日 A海岸最活跃群</div>
-                        <div class="champion-name">{{ report.champion_group.group_name }}</div>
-                        <div class="champion-value">{{ report.champion_group.total_messages }}</div>
-                        <div class="stat-label">messages today</div>
+                    <article class="metric-card">
+                        <div class="metric-label">今日最活跃群</div>
+                        <div class="metric-value">{{ report.champion_group.total_messages }}</div>
+                        <div class="metric-note">{{ report.champion_group.group_name }}</div>
                     </article>
-                    <article class="card">
-                        <div class="stat-label">今日 A海岸累计消息</div>
-                        <div class="stat-value">{{ report.total_messages }}</div>
+                    <article class="metric-card">
+                        <div class="metric-label">累计消息</div>
+                        <div class="metric-value">{{ report.total_messages }}</div>
+                        <div class="metric-note">messages today</div>
                     </article>
-                    <article class="card">
-                        <div class="stat-label">今日 A海岸累计参与人数</div>
-                        <div class="stat-value">{{ report.total_participants }}</div>
+                    <article class="metric-card">
+                        <div class="metric-label">累计参与人数</div>
+                        <div class="metric-value">{{ report.total_participants }}</div>
+                        <div class="metric-note">active users</div>
                     </article>
                 </div>
             </section>
 
             {% if report.water_king %}
             <section class="section">
-                <article class="card overview-card">
+                <article class="callout-card">
                     <h2 class="section-title">全A海岸最能水用户</h2>
                     <p class="overview-text">
                         <strong>{{ report.water_king.nickname }}</strong>
-                        今日共发言 {{ report.water_king.message_count }} 条，来自
+                        今日发言 {{ report.water_king.message_count }} 条，来自
                         <strong>{{ report.water_king.group_name }}</strong>。
                     </p>
                     {% if report.runner_up_users %}
-                    <div class="leaderboard">
+                    <div class="table" style="margin-top: 16px;">
                         {% for user in report.runner_up_users %}
-                        <div class="leaderboard-row">
-                            <div class="leaderboard-rank">#{{ user.rank }}</div>
+                        <div class="table-row water-row">
+                            <div class="rank-badge">#{{ user.rank }}</div>
                             <div>
-                                <div class="leaderboard-name">{{ user.nickname }}</div>
-                                <div class="leaderboard-group">来自 {{ user.group_name }}</div>
+                                <div class="name">{{ user.nickname }}</div>
+                                <div class="meta-text">来自 {{ user.group_name }}</div>
                             </div>
-                            <div class="leaderboard-count">{{ user.message_count }} 条</div>
+                            <div class="name">{{ user.message_count }} 条</div>
                         </div>
                         {% endfor %}
                     </div>
@@ -372,20 +78,20 @@
             {% endif %}
 
             <section class="section">
-                <article class="card overview-card">
+                <article class="callout-card">
                     <h2 class="section-title">今日 A海岸点评</h2>
-                    <p class="overview-text">{{ report.overview }}</p>
+                    <p class="overview-text">{{ report.overview | render_union_markdown }}</p>
                 </article>
             </section>
 
             <section class="section">
-                <h2 class="section-title">今日 A海岸 Top 3 金句</h2>
-                <div class="list-grid">
+                <h2 class="section-title">今日 Top 3 金句</h2>
+                <div class="item-grid">
                     {% for quote in report.top_quotes %}
-                    <article class="card quote-card">
-                        <span class="quote-rank">{{ loop.index }}</span>
-                        <div class="quote-content">“{{ quote.content }}”</div>
-                        <div class="quote-meta">
+                    <article class="item-card">
+                        <span class="rank-badge">{{ loop.index }}</span>
+                        <div class="quote-text">“{{ quote.content }}”</div>
+                        <div class="meta-text">
                             <div><strong>{{ quote.sender }}</strong></div>
                             <div>{{ quote.group_name }}</div>
                             <div>{{ quote.reason }}</div>
@@ -399,24 +105,25 @@
             </section>
 
             <section class="section">
-                <h2 class="section-title">A海岸活跃度横向对比</h2>
-                <div class="group-table">
+                <h2 class="section-title">活跃度横向对比</h2>
+                <div class="table">
                     {% for group in report.group_snapshots %}
-                    <div class="group-row{% if group.group_ref == report.champion_group.group_ref %} highlight{% endif %}">
+                    <div class="table-row union-table-row{% if group.group_ref == report.champion_group.group_ref %} highlight{% endif %}">
                         <div>
-                            <div class="group-name">{{ group.group_name }}</div>
+                            <div class="name">{{ group.group_name }}</div>
+                            <div class="meta-text">{{ group.group_ref }}</div>
                         </div>
                         <div>
-                            <div class="stat-label">消息</div>
-                            <div>{{ group.total_messages }}</div>
+                            <div class="metric-label">消息</div>
+                            <div class="name">{{ group.total_messages }}</div>
                         </div>
                         <div>
-                            <div class="stat-label">参与人数</div>
-                            <div>{{ group.participant_count }}</div>
+                            <div class="metric-label">参与</div>
+                            <div class="name">{{ group.participant_count }}</div>
                         </div>
                         <div>
-                            <div class="stat-label">话题数</div>
-                            <div>{{ group.topics_count }}</div>
+                            <div class="metric-label">话题</div>
+                            <div class="name">{{ group.topics_count }}</div>
                         </div>
                     </div>
                     {% endfor %}
@@ -425,18 +132,18 @@
 
             {% if report.topic_highlights %}
             <section class="section">
-                <h2 class="section-title">A海岸热议片段</h2>
+                <h2 class="section-title">热议片段</h2>
                 <div class="topic-grid">
                     {% for topic in report.topic_highlights %}
-                    <article class="card topic-card">
-                        <h3 class="topic-title">{{ topic.topic }}</h3>
-                        <div class="topic-meta">
-                            {% if topic.contributors %}
+                    <article class="item-card">
+                        <h3 class="item-title">{{ topic.topic }}</h3>
+                        {% if topic.contributors %}
+                        <div class="meta-text">
                             {% for contributor in topic.contributors %}
                             <strong>{{ contributor }}</strong>{% if not loop.last %}、{% endif %}
                             {% endfor %}
-                            {% endif %}
                         </div>
+                        {% endif %}
                         <p class="topic-detail">{{ topic.detail | render_union_markdown }}</p>
                         {% if topic.persona_comment %}
                         <div class="persona-comment"><span class="persona-label">爱驼点评:</span>{{ topic.persona_comment }}</div>

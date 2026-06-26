@@ -1,5 +1,5 @@
 """
-跨群聚合日报渲染器
+单群日报渲染器。
 """
 
 from __future__ import annotations
@@ -13,32 +13,31 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
 
-class UnionReportRenderer:
-    """负责渲染跨群聚合日报 HTML。"""
+class SingleReportRenderer:
+    """负责渲染单群日报 HTML。"""
 
     def __init__(self, report_generator: Any):
         self.report_generator = report_generator
-        self.template_dir = Path(__file__).resolve().parent / "templates" / "union"
-        self.theme_path = (
-            Path(__file__).resolve().parent / "templates" / "shared" / "report_theme.css"
-        )
+        template_root = Path(__file__).resolve().parent / "templates"
+        self.template_dir = template_root / "single"
+        self.theme_path = template_root / "shared" / "report_theme.css"
         self._env = Environment(
             loader=FileSystemLoader(str(self.template_dir)),
             autoescape=select_autoescape(["html", "xml"]),
             trim_blocks=True,
             lstrip_blocks=True,
         )
-        self._env.filters["render_union_markdown"] = self._render_union_markdown
+        self._env.filters["render_single_markdown"] = self._render_single_markdown
 
     def render_html(self, report: Any) -> str:
-        template = self._env.get_template("union_template.html")
+        template = self._env.get_template("single_template.html")
         return template.render(report=report, theme_css=self._load_theme_css())
 
     def _load_theme_css(self) -> str:
         return self.theme_path.read_text(encoding="utf-8")
 
     @staticmethod
-    def _render_union_markdown(text: Any) -> Markup:
+    def _render_single_markdown(text: Any) -> Markup:
         raw = str(text or "")
         escaped = html.escape(raw, quote=False)
         escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)

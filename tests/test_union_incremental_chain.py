@@ -84,6 +84,10 @@ _install_runtime_stubs()
 
 from src.application.services import union_daily_report_service as union_module
 from src.application.services.union_daily_report_service import UnionDailyReportService
+from src.application.services.single_daily_report_service import (
+    SingleDailyReport,
+    SingleDailyReportService,
+)
 from src.infrastructure.analysis.analyzers import base_analyzer as base_analyzer_module
 from src.infrastructure.analysis.analyzers.base_analyzer import LLMResponseParseError
 from src.infrastructure.analysis.analyzers.topic_analyzer import TopicAnalyzer
@@ -98,11 +102,17 @@ class FakeConfig:
         *,
         source_groups: list[str] | None = None,
         target_groups: list[str] | None = None,
+        single_target_groups: list[str] | None = None,
+        union_enabled: bool = True,
+        single_enabled: bool = False,
         union_prompt: str = "",
         persona_comment_prompt: str = "",
     ):
         self.source_groups = source_groups or []
         self.target_groups = target_groups or []
+        self.single_target_groups = single_target_groups or []
+        self.union_enabled = union_enabled
+        self.single_enabled = single_enabled
         self.union_prompt = union_prompt
         self.persona_comment_prompt = persona_comment_prompt
 
@@ -122,7 +132,7 @@ class FakeConfig:
         return False
 
     def get_union_report_enabled(self) -> bool:
-        return True
+        return self.union_enabled
 
     def get_union_groups_list(self) -> list[str]:
         return self.source_groups
@@ -132,6 +142,48 @@ class FakeConfig:
 
     def get_union_wait_timeout_minutes(self) -> int:
         return 0
+
+    def get_union_report_time(self) -> str:
+        return "23:30"
+
+    def get_union_prepare_lead_minutes(self) -> int:
+        return 20
+
+    def get_single_report_enabled(self) -> bool:
+        return self.single_enabled
+
+    def get_single_report_target_groups(self) -> list[str]:
+        return self.single_target_groups
+
+    def get_single_report_time(self) -> str:
+        return "23:10"
+
+    def get_single_prepare_lead_minutes(self) -> int:
+        return 10
+
+    def get_single_wait_timeout_minutes(self) -> int:
+        return 0
+
+    def get_incremental_active_start_hour(self) -> int:
+        return 8
+
+    def get_incremental_active_end_hour(self) -> int:
+        return 10
+
+    def get_incremental_interval_minutes(self) -> int:
+        return 60
+
+    def get_incremental_max_daily_analyses(self) -> int:
+        return 2
+
+    def get_incremental_stagger_seconds(self) -> int:
+        return 0
+
+    def get_max_concurrent_tasks(self) -> int:
+        return 1
+
+    def is_group_allowed(self, _group_ref: str) -> bool:
+        return True
 
     def get_debug_mode(self) -> bool:
         return False
@@ -692,19 +744,27 @@ class SchedulerChainTests(unittest.IsolatedAsyncioTestCase):
         *,
         source_groups: list[str] | None = None,
         target_groups: list[str] | None = None,
+        single_target_groups: list[str] | None = None,
+        union_enabled: bool = True,
+        single_enabled: bool = False,
         union_service=None,
+        single_service=None,
         report_generator=None,
     ) -> AutoScheduler:
         return AutoScheduler(
             config_manager=FakeConfig(
                 source_groups=source_groups,
                 target_groups=target_groups,
+                single_target_groups=single_target_groups,
+                union_enabled=union_enabled,
+                single_enabled=single_enabled,
             ),
             analysis_service=SimpleNamespace(),
             bot_manager=SimpleNamespace(),
             report_generator=report_generator or SimpleNamespace(),
             html_render_func=lambda *args, **kwargs: b"",
             union_daily_report_service=union_service or SimpleNamespace(),
+            single_daily_report_service=single_service or SimpleNamespace(),
         )
 
     async def test_union_targets_are_required_without_source_fallback(self):
@@ -766,6 +826,202 @@ class SchedulerChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["success"], False)
         self.assertEqual(result["reason"], "dispatch_failed")
 
+    def test_single_only_schedule_registers_incremental_and_single_jobs(self):
+        class FakeScheduler:
+            def __init__(self):
+                self.jobs = {}
+
+            def add_job(self, func, trigger, id, **kwargs):
+                self.jobs[id] = {
+                    "func": func,
+                    "trigger": trigger,
+                    "kwargs": kwargs,
+                }
+
+            def get_job(self, job_id):
+                return self.jobs.get(job_id)
+
+            def remove_job(self, job_id):
+                self.jobs.pop(job_id, None)
+
+        cron_scheduler = FakeScheduler()
+        context = SimpleNamespace(
+            cron_manager=SimpleNamespace(scheduler=cron_scheduler)
+        )
+        scheduler = self._scheduler(
+            source_groups=[],
+            target_groups=[],
+            single_target_groups=["qq:GroupMessage:100"],
+            union_enabled=False,
+            single_enabled=True,
+        )
+
+        scheduler.schedule_jobs(context)
+
+        self.assertIn("union_incremental_analysis_0800", cron_scheduler.jobs)
+        self.assertIn("astrbot_plugin_single_daily_report_trigger", cron_scheduler.jobs)
+        self.assertIn(
+            "astrbot_plugin_single_daily_report_prepare_trigger",
+            cron_scheduler.jobs,
+        )
+        self.assertNotIn("astrbot_plugin_union_daily_report_trigger", cron_scheduler.jobs)
+
+    async def test_incremental_targets_merge_by_full_group_ref(self):
+        scheduler = self._scheduler(
+            source_groups=["qq:GroupMessage:100"],
+            single_target_groups=[
+                "qq:GroupMessage:100",
+                "telegram:GroupMessage:100",
+            ],
+            union_enabled=True,
+            single_enabled=True,
+        )
+
+        targets = await scheduler._get_incremental_runtime_targets()
+        group_refs = [item[2] for item in targets]
+
+        self.assertEqual(
+            group_refs,
+            ["qq:GroupMessage:100", "telegram:GroupMessage:100"],
+        )
+
+    async def test_single_report_does_not_call_union_service(self):
+        report = SingleDailyReport(
+            report_date="2026-05-26",
+            group_ref="qq:GroupMessage:100",
+            platform_id="qq",
+            group_id="100",
+            group_name="单群",
+            total_messages=10,
+            participant_count=3,
+            total_characters=120,
+            most_active_period="20:00",
+            topics=[],
+            golden_quotes=[],
+            water_king=None,
+        )
+
+        class FakeSingleService:
+            async def build_single_report(self, *args, **kwargs):
+                return report
+
+        class FailUnionService:
+            async def build_union_report(self, *args, **kwargs):
+                raise AssertionError("single report must not call union aggregation")
+
+        class ImageReportGenerator:
+            async def render_html_content_to_image(self, *args, **kwargs):
+                return "base64://ok"
+
+        scheduler = self._scheduler(
+            union_enabled=False,
+            single_enabled=True,
+            union_service=FailUnionService(),
+            single_service=FakeSingleService(),
+            report_generator=ImageReportGenerator(),
+        )
+        scheduler.single_report_renderer = SimpleNamespace(
+            render_html=lambda _report: "<html></html>",
+        )
+        scheduler.message_sender = SimpleNamespace(
+            send_image_smart=lambda *args, **kwargs: asyncio.sleep(0, result=True)
+        )
+
+        result = await scheduler._run_single_report_core(
+            "2026-05-26",
+            target_groups_override=[("100", "qq")],
+            skip_enabled_check=True,
+            bypass_daily_guard=True,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["sent_count"], 1)
+
+    async def test_single_missing_json_fails_without_dispatch(self):
+        service = SingleDailyReportService(
+            FakeConfig(),
+            FakeHistory({}),
+        )
+
+        class ImageReportGenerator:
+            async def render_html_content_to_image(self, *args, **kwargs):
+                raise AssertionError("render should not run without source JSON")
+
+        scheduler = self._scheduler(
+            union_enabled=False,
+            single_enabled=True,
+            single_service=service,
+            report_generator=ImageReportGenerator(),
+        )
+        scheduler.single_report_renderer = SimpleNamespace(
+            render_html=lambda _report: "<html></html>",
+        )
+        scheduler.message_sender = SimpleNamespace(
+            send_image_smart=lambda *args, **kwargs: asyncio.sleep(0, result=True)
+        )
+
+        result = await scheduler._run_single_report_core(
+            "2026-05-26",
+            target_groups_override=[("100", "qq")],
+            skip_enabled_check=True,
+            bypass_daily_guard=True,
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "single_report_not_ready")
+
+    async def test_single_empty_image_render_fails_without_text_fallback(self):
+        report = SingleDailyReport(
+            report_date="2026-05-26",
+            group_ref="qq:GroupMessage:100",
+            platform_id="qq",
+            group_id="100",
+            group_name="单群",
+            total_messages=10,
+            participant_count=3,
+            total_characters=120,
+            most_active_period="20:00",
+            topics=[],
+            golden_quotes=[],
+            water_king=None,
+        )
+
+        class FakeSingleService:
+            async def build_single_report(self, *args, **kwargs):
+                return report
+
+        class EmptyImageReportGenerator:
+            async def render_html_content_to_image(self, *args, **kwargs):
+                return None
+
+        called = {"send": False}
+
+        async def fail_if_send(*args, **kwargs):
+            called["send"] = True
+            return True
+
+        scheduler = self._scheduler(
+            union_enabled=False,
+            single_enabled=True,
+            single_service=FakeSingleService(),
+            report_generator=EmptyImageReportGenerator(),
+        )
+        scheduler.single_report_renderer = SimpleNamespace(
+            render_html=lambda _report: "<html></html>",
+        )
+        scheduler.message_sender = SimpleNamespace(send_image_smart=fail_if_send)
+
+        result = await scheduler._run_single_report_core(
+            "2026-05-26",
+            target_groups_override=[("100", "qq")],
+            skip_enabled_check=True,
+            bypass_daily_guard=True,
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "dispatch_failed")
+        self.assertFalse(called["send"])
+
 
 class OneBotAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_local_image_is_sent_as_base64_not_file_path(self):
@@ -807,6 +1063,25 @@ class TemplateStaticTests(unittest.TestCase):
 
         self.assertIn("爱驼点评:", html)
         self.assertIn("persona-label", html)
+
+    def test_report_templates_use_shared_pink_theme(self):
+        root = Path(__file__).resolve().parents[1]
+        theme = (
+            root
+            / "src/infrastructure/reporting/templates/shared/report_theme.css"
+        ).read_text(encoding="utf-8")
+        union_html = (
+            root
+            / "src/infrastructure/reporting/templates/union/union_template.html"
+        ).read_text(encoding="utf-8")
+        single_html = (
+            root
+            / "src/infrastructure/reporting/templates/single/single_template.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("#E799B0", theme)
+        self.assertIn("{{ theme_css | safe }}", union_html)
+        self.assertIn("{{ theme_css | safe }}", single_html)
 
 
 if __name__ == "__main__":
