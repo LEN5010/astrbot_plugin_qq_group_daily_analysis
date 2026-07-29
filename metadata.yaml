@@ -1,7 +1,7 @@
 name: astrbot_plugin_qq_group_daily_analysis
 display_name: 增量日报插件
 desc: "AstrBot 增量日报插件，支持跨群联合日报与单群每日日报"
-version: v5.0.0
+version: v5.1.0
 author: LEN5010
 astrbot_version: ">=4.16.0"
 support_platforms: 

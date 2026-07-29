@@ -36,6 +36,7 @@ class AutoScheduler:
         plugin_instance: Any | None = None,
         union_daily_report_service: Any | None = None,
         single_daily_report_service: Any | None = None,
+        report_archive: Any | None = None,
     ):
         self.config_manager = config_manager
         self.analysis_service = analysis_service
@@ -45,6 +46,7 @@ class AutoScheduler:
         self.plugin_instance = plugin_instance
         self.union_daily_report_service = union_daily_report_service
         self.single_daily_report_service = single_daily_report_service
+        self.report_archive = report_archive
 
         self.message_sender = MessageSender(bot_manager, config_manager)
         self.union_report_renderer = (
@@ -1032,6 +1034,15 @@ class AutoScheduler:
         if not image_url:
             logger.warning("跨群联合日报图片渲染失败")
             return 0
+
+        if self.report_archive:
+            archived_path = await self.report_archive.save(
+                image_url,
+                report.report_date,
+            )
+            if not archived_path:
+                logger.warning("联合日报归档失败，跳过发送: date=%s", report.report_date)
+                return 0
 
         caption = f"📊 A海岸联合日报 ({report.report_date})"
         sent_count = 0

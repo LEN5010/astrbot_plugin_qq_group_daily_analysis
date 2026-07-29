@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import sys
@@ -93,6 +94,7 @@ from src.infrastructure.analysis.analyzers.base_analyzer import LLMResponseParse
 from src.infrastructure.analysis.analyzers.topic_analyzer import TopicAnalyzer
 from src.infrastructure.platform.adapters.onebot_adapter import OneBotAdapter
 from src.infrastructure.persistence.history_repository import HistoryRepository
+from src.infrastructure.reporting.report_archive import ReportArchive
 from src.infrastructure.scheduler.auto_scheduler import AutoScheduler
 
 
@@ -937,6 +939,62 @@ class SchedulerChainTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["sent_count"], 1)
 
+    async def test_union_report_archives_one_copy_before_dispatch(self):
+        report = SimpleNamespace(
+            report_date="2026-05-26",
+            group_snapshots=[],
+            champion_group=SimpleNamespace(group_ref=""),
+            top_quotes=[],
+            topic_highlights=[],
+            water_king=None,
+            runner_up_users=[],
+        )
+
+        union_service = SimpleNamespace(
+            build_union_report=lambda *args, **kwargs: asyncio.sleep(
+                0, result=report
+            )
+        )
+
+        class ImageReportGenerator:
+            async def render_html_content_to_image(self, *args, **kwargs):
+                return "base64://image"
+
+        archive_calls = []
+
+        class FakeArchive:
+            async def save(self, *args):
+                archive_calls.append(args)
+                return Path("/archive/report.png")
+
+        scheduler = self._scheduler(
+            source_groups=["qq:GroupMessage:100"],
+            target_groups=[
+                "qq:GroupMessage:200",
+                "qq:GroupMessage:300",
+            ],
+            union_service=union_service,
+            report_generator=ImageReportGenerator(),
+        )
+        scheduler.report_archive = FakeArchive()
+        scheduler.union_report_renderer = SimpleNamespace(
+            render_html=lambda _report: "<html></html>",
+        )
+        scheduler.message_sender = SimpleNamespace(
+            send_image_smart=lambda *args, **kwargs: asyncio.sleep(0, result=True)
+        )
+
+        result = await scheduler._run_union_report_core(
+            "2026-05-26",
+            target_groups_override=[("200", "qq"), ("300", "qq")],
+            skip_enabled_check=True,
+            bypass_daily_guard=True,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["sent_count"], 2)
+        self.assertEqual(archive_calls, [("base64://image", "2026-05-26")])
+
     async def test_single_manual_runs_incremental_before_prepare_and_dispatch(self):
         scheduler = self._scheduler(
             union_enabled=False,
@@ -1091,6 +1149,50 @@ class OneBotAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message[0], {"type": "text", "data": {"text": "日报"}})
         self.assertTrue(message[1]["data"]["file"].startswith("base64://"))
         self.assertNotIn("file://", message[1]["data"]["file"])
+
+
+class ReportArchiveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_saves_base64_image_and_finds_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive = ReportArchive(temp_dir)
+            image_data = b"\x89PNG\r\n\x1a\nfake-image"
+
+            saved_path = await archive.save(
+                "base64://" + base64.b64encode(image_data).decode(),
+                "2026-07-28",
+            )
+            found_path = await archive.find("2026-07-28")
+
+            self.assertIsNotNone(saved_path)
+            self.assertEqual(found_path, saved_path)
+            self.assertEqual(found_path.read_bytes(), image_data)
+
+    async def test_new_union_report_replaces_same_dates_archive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive = ReportArchive(temp_dir)
+            first_image = b"\x89PNG\r\n\x1a\nfirst"
+            second_image = b"\x89PNG\r\n\x1a\nsecond"
+
+            await archive.save(
+                "base64://" + base64.b64encode(first_image).decode(),
+                "2026-07-28",
+            )
+            await archive.save(
+                "base64://" + base64.b64encode(second_image).decode(),
+                "2026-07-28",
+            )
+
+            found_path = await archive.find("2026-07-28")
+
+            self.assertIsNotNone(found_path)
+            self.assertEqual(found_path.read_bytes(), second_image)
+
+    async def test_invalid_date_is_not_used_as_a_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive = ReportArchive(temp_dir)
+            found_path = await archive.find("../../outside")
+
+            self.assertIsNone(found_path)
 
 
 class TemplateStaticTests(unittest.TestCase):

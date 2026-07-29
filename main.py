@@ -7,7 +7,7 @@
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig
@@ -41,6 +41,7 @@ from .src.infrastructure.persistence.telegram_group_registry import (
 )
 from .src.infrastructure.platform.bot_manager import BotManager
 from .src.infrastructure.reporting.generators import ReportGenerator
+from .src.infrastructure.reporting.report_archive import ReportArchive
 from .src.infrastructure.scheduler.auto_scheduler import AutoScheduler
 from .src.shared.trace_context import TraceLogFilter
 from .src.utils.logger import logger
@@ -51,7 +52,7 @@ from .src.utils.resilience import GlobalRateLimiter
     "astrbot_plugin_qq_group_daily_analysis",
     "LEN5010",
     "基于增量分析的联合日报与单群日报插件",
-    "5.0.0",
+    "5.1.0",
 )
 class GroupDailyAnalysis(Star):
     """增量日报插件主类。"""
@@ -62,6 +63,7 @@ class GroupDailyAnalysis(Star):
     history_manager: HistoryManager
     history_repository: HistoryRepository
     report_generator: ReportGenerator
+    report_archive: ReportArchive
     telegram_group_registry: TelegramGroupRegistry
     statistics_service: StatisticsService
     analysis_domain_service: AnalysisDomainService
@@ -96,6 +98,7 @@ class GroupDailyAnalysis(Star):
             )
 
         self.report_generator = ReportGenerator(self.config_manager, plugin_data_dir)
+        self.report_archive = ReportArchive(plugin_data_dir)
         self.history_repository = HistoryRepository(str(plugin_data_dir))
         self.telegram_group_registry = TelegramGroupRegistry(self)
 
@@ -138,6 +141,7 @@ class GroupDailyAnalysis(Star):
             plugin_instance=self,
             union_daily_report_service=self.union_daily_report_service,
             single_daily_report_service=self.single_daily_report_service,
+            report_archive=self.report_archive,
         )
 
         GlobalRateLimiter.get_instance(self.config_manager.get_llm_max_concurrent())
@@ -252,15 +256,88 @@ class GroupDailyAnalysis(Star):
 
     def _get_platform_id_from_event(self, event: AstrMessageEvent) -> str:
         try:
-            return event.get_platform_id()
+            platform_id = event.get_platform_id()
+            if platform_id:
+                return str(platform_id)
         except Exception:
-            if (
-                hasattr(event, "platform_meta")
-                and event.platform_meta
-                and hasattr(event.platform_meta, "id")
-            ):
-                return event.platform_meta.id
-            return "default"
+            pass
+        if (
+            hasattr(event, "platform_meta")
+            and event.platform_meta
+            and hasattr(event.platform_meta, "id")
+            and event.platform_meta.id
+        ):
+            return str(event.platform_meta.id)
+        return "default"
+
+    def _get_group_ref_from_event(self, event: AstrMessageEvent) -> str | None:
+        group_id = self._get_group_id_from_event(event)
+        if not group_id:
+            return None
+        platform_id = self._get_platform_id_from_event(event)
+        return f"{platform_id}:GroupMessage:{group_id}"
+
+    async def _find_report_for_event(
+        self,
+        event: AstrMessageEvent,
+        report_date: str,
+    ) -> Path | None:
+        group_ref = self._get_group_ref_from_event(event)
+        if not group_ref:
+            return None
+        if not self.config_manager.is_group_allowed(group_ref):
+            return None
+        return await self.report_archive.find(report_date)
+
+    @filter.command("昨日日报")
+    async def yesterday_report(self, event: AstrMessageEvent):
+        """查看昨天的联合日报归档。"""
+        if self._terminating:
+            return
+        if not self._get_group_id_from_event(event):
+            yield event.plain_result("请在群聊中使用此命令")
+            return
+
+        report_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        report_path = await self._find_report_for_event(event, report_date)
+        if not report_path:
+            yield event.plain_result(f"没有找到 {report_date} 的日报归档")
+            return
+        yield event.image_result(str(report_path))
+
+    @filter.command("日报")
+    async def archived_report(
+        self,
+        event: AstrMessageEvent,
+        date_flag: str = "",
+        report_date: str = "",
+    ):
+        """
+        查看指定日期的联合日报归档。
+        用法: /日报 -d YYYY-MM-DD
+        """
+        if self._terminating:
+            return
+        if not self._get_group_id_from_event(event):
+            yield event.plain_result("请在群聊中使用此命令")
+            return
+        if date_flag != "-d" or not report_date:
+            yield event.plain_result("用法: /日报 -d YYYY-MM-DD")
+            return
+
+        try:
+            datetime.strptime(report_date, "%Y-%m-%d")
+        except ValueError:
+            yield event.plain_result(
+                "日期格式错误，请使用 YYYY-MM-DD，例如 /日报 -d 2026-07-28"
+            )
+            return
+
+        report_path = await self._find_report_for_event(event, report_date)
+        if not report_path:
+            yield event.plain_result(f"没有找到 {report_date} 的日报归档")
+            return
+        yield event.image_result(str(report_path))
 
     @filter.command("联合日报测试", alias={"union_report_test"})
     @filter.permission_type(PermissionType.ADMIN)
