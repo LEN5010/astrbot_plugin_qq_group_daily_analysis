@@ -712,6 +712,93 @@ class UnionChainTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(report)
 
+    def test_union_json_parser_accepts_common_model_wrappers(self):
+        payload = {
+            "top_quotes": [{"quote_id": 1, "reason": "有代表性"}],
+            "global_commentary": "整体活跃。",
+        }
+        serialized = json.dumps(payload, ensure_ascii=False)
+
+        samples = [
+            serialized,
+            f"\ufeff{serialized}",
+            f"```json\n{serialized}\n```",
+            f"<think>先整理候选</think>\n{serialized}",
+            f"以下是结果：\n{serialized}\n请查收。",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample[:20]):
+                self.assertEqual(
+                    UnionDailyReportService._parse_json_object(sample),
+                    payload,
+                )
+
+        self.assertIsNone(UnionDailyReportService._parse_json_object("不是 JSON"))
+        self.assertIsNone(UnionDailyReportService._parse_json_object("[1, 2, 3]"))
+
+    async def test_union_json_format_failure_retries_with_correction(self):
+        date = "2026-05-26"
+        group_ref = "qq:GroupMessage:100"
+        service = UnionDailyReportService(
+            FakeConfig(),
+            FakeHistory(
+                {
+                    (group_ref, date): self._analysis_result(
+                        group_ref,
+                        quotes=[
+                            {
+                                "content": "金句",
+                                "sender": "甲",
+                                "reason": "理由",
+                            }
+                        ],
+                    )
+                }
+            ),
+            SimpleNamespace(),
+        )
+        responses = [
+            SimpleNamespace(completion_text="不是 JSON", usage={}),
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "top_quotes": [{"quote_id": 1, "reason": "纠正后成功"}],
+                        "global_commentary": "整体活跃。",
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+            SimpleNamespace(
+                completion_text=json.dumps(
+                    {
+                        "quote_comments": {"q1": "这句够锋利也确实挺能整活"},
+                    },
+                    ensure_ascii=False,
+                ),
+                usage={},
+            ),
+        ]
+        prompts: list[str] = []
+        original_call = union_module.call_provider_with_retry
+
+        async def fake_call(*args, **kwargs):
+            prompts.append(kwargs.get("prompt", ""))
+            return responses.pop(0)
+
+        union_module.call_provider_with_retry = fake_call
+        try:
+            report = await service.build_union_report([group_ref], date)
+        finally:
+            union_module.call_provider_with_retry = original_call
+
+        self.assertIsNotNone(report)
+        self.assertEqual(report.top_quotes[0].reason, "纠正后成功")
+        self.assertEqual(len(prompts), 3)
+        self.assertNotIn("上一次响应无法解析为 JSON", prompts[0])
+        self.assertIn("上一次响应无法解析为 JSON", prompts[1])
+
 
 class SourceAnalyzerTests(unittest.IsolatedAsyncioTestCase):
     async def test_schema_less_source_llm_output_fails(self):

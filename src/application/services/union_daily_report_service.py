@@ -102,6 +102,15 @@ class UnionDailyReportService:
 
     _PERSONA_COMMENT_MIN_LENGTH = 10
     _PERSONA_COMMENT_MAX_LENGTH = 30
+    _JSON_FORMAT_ATTEMPTS = 2
+    _JSON_RETRY_SUFFIX = """
+
+上一次响应无法解析为 JSON。请重新完成任务，并严格遵守以下要求：
+- 只返回一个 JSON 对象。
+- 不要使用 Markdown 代码块。
+- 不要输出思考过程、解释、前言或结语。
+- 字段和值必须符合上方最终输出合同。
+""".rstrip()
 
     _DEFAULT_PERSONA_COMMENT_PROMPT = """
 你要为跨群联合日报中最终展示的条目写一小段人格点评。
@@ -587,29 +596,20 @@ ${topics_text}
             self.last_failure_reason = "union_llm_failed"
             return None
 
-        response = await call_provider_with_retry(
-            context=self.llm_context,
-            config_manager=self.config_manager,
+        response_result = await self._request_json_object(
             prompt=prompt,
             provider_id_key="union_report_provider_id",
-            response_format=build_response_format(
-                "union_daily_report",
-                self._build_union_report_schema(len(quote_candidates)),
-            ),
+            response_format_name="union_daily_report",
+            response_schema=self._build_union_report_schema(len(quote_candidates)),
+            failure_context="跨群聚合日报",
         )
 
-        if response is None:
+        if response_result is None:
             logger.warning("跨群聚合日报 LLM 调用失败")
             self.last_failure_reason = "union_llm_failed"
             return None
 
-        result_text = extract_response_text(response)
-        token_usage = extract_token_usage(response)
-        parsed = self._parse_strict_json_object(result_text)
-        if parsed is None:
-            logger.warning("跨群聚合日报 JSON 严格解析失败")
-            self.last_failure_reason = "union_llm_failed"
-            return None
+        parsed, token_usage = response_result
 
         raw_top_quotes = parsed.get("top_quotes")
         if not isinstance(raw_top_quotes, list):
@@ -669,30 +669,23 @@ ${topics_text}
 
             prompt = self._build_persona_comment_prompt(quote_items, topic_items)
             system_prompt = await self._build_persona_system_prompt(group_ref)
-            response = await call_provider_with_retry(
-                context=self.llm_context,
-                config_manager=self.config_manager,
+            response_result = await self._request_json_object(
                 prompt=prompt,
                 umo=group_ref,
                 provider_id_key="union_report_provider_id",
                 system_prompt=system_prompt,
-                response_format=build_response_format(
-                    "union_persona_comments",
-                    self._build_persona_comment_schema(
-                        [item_id for item_id, _ in quote_items],
-                        [item_id for item_id, _ in topic_items],
-                    ),
+                response_format_name="union_persona_comments",
+                response_schema=self._build_persona_comment_schema(
+                    [item_id for item_id, _ in quote_items],
+                    [item_id for item_id, _ in topic_items],
                 ),
+                failure_context=f"人格点评 group_ref={group_ref}",
             )
-            if response is None:
+            if response_result is None:
                 logger.warning("人格点评 LLM 调用失败: group_ref=%s", group_ref)
                 return None
 
-            result_text = extract_response_text(response)
-            parsed = self._parse_strict_json_object(result_text)
-            if parsed is None:
-                logger.warning("人格点评 JSON 严格解析失败: group_ref=%s", group_ref)
-                return None
+            parsed, usage = response_result
 
             if not self._apply_persona_comments(
                 parsed,
@@ -702,23 +695,97 @@ ${topics_text}
                 logger.warning("人格点评结果不完整: group_ref=%s", group_ref)
                 return None
 
-            usage = extract_token_usage(response)
             for key in usage_total:
                 usage_total[key] += usage.get(key, 0)
 
         return usage_total
 
+    async def _request_json_object(
+        self,
+        *,
+        prompt: str,
+        provider_id_key: str,
+        response_format_name: str,
+        response_schema: JSONObject,
+        failure_context: str,
+        umo: str | None = None,
+        system_prompt: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, int]] | None:
+        """请求 JSON 对象，并对模型格式抖动额外纠正重试一次。"""
+        usage_total = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+
+        for attempt in range(1, self._JSON_FORMAT_ATTEMPTS + 1):
+            request_prompt = prompt
+            if attempt > 1:
+                request_prompt = f"{prompt}{self._JSON_RETRY_SUFFIX}"
+
+            response = await call_provider_with_retry(
+                context=self.llm_context,
+                config_manager=self.config_manager,
+                prompt=request_prompt,
+                umo=umo,
+                provider_id_key=provider_id_key,
+                system_prompt=system_prompt,
+                response_format=build_response_format(
+                    response_format_name,
+                    response_schema,
+                ),
+            )
+            if response is None:
+                return None
+
+            usage = extract_token_usage(response)
+            for key in usage_total:
+                usage_total[key] += usage.get(key, 0)
+
+            result_text = extract_response_text(response)
+            parsed = self._parse_json_object(result_text)
+            if parsed is not None:
+                if attempt > 1:
+                    logger.info("%s JSON 格式纠正重试成功", failure_context)
+                return parsed, usage_total
+
+            logger.warning(
+                "%s JSON 解析失败: attempt=%d/%d length=%d fenced=%s",
+                failure_context,
+                attempt,
+                self._JSON_FORMAT_ATTEMPTS,
+                len(result_text) if isinstance(result_text, str) else 0,
+                bool(isinstance(result_text, str) and "```" in result_text),
+            )
+
+        return None
+
     @staticmethod
-    def _parse_strict_json_object(result_text: str) -> dict[str, Any] | None:
+    def _parse_json_object(result_text: str) -> dict[str, Any] | None:
+        """兼容模型常见包装，同时仍只接受 JSON 对象。"""
         if not isinstance(result_text, str) or not result_text.strip():
             return None
 
+        normalized = result_text.lstrip("\ufeff").strip()
         try:
-            parsed = json.loads(result_text.strip())
+            parsed = json.loads(normalized)
         except json.JSONDecodeError:
-            return None
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
 
-        return parsed if isinstance(parsed, dict) else None
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(normalized):
+            if char != "{":
+                continue
+            try:
+                candidate, _end = decoder.raw_decode(normalized[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                return candidate
+
+        return None
 
     def _build_persona_comment_prompt(
         self,
